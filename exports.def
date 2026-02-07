@@ -1,0 +1,14 @@
+LIBRARY RadioSFSE
+
+EXPORTS
+    SFSEPlugin_Load
+    SFSEPlugin_Version DATA
+    change_playlist
+    play
+    start
+    pause
+    stop
+    forward
+    rewind=radio_rewind
+    rescan
+    set_positions

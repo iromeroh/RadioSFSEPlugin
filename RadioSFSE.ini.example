@@ -1,0 +1,31 @@
+# Radio root. Environment variables are allowed.
+root_path=%USERPROFILE%\OneDrive\Documentos\My Games\Starfield\Data\Radio
+
+# Station special-file prefixes.
+transition_prefix=transition_
+ad_prefix=ad_
+
+# Station behavior.
+ad_interval_songs=3
+
+# Distance fade in game units.
+min_fade_distance=150
+max_fade_distance=5000
+
+# Scan controls.
+auto_rescan_on_change_playlist=true
+loop_playlist=true
+
+# Experimental direct Papyrus hook (option 2 path).
+# This patches a game CALL instruction to capture VM/registry pointer.
+# Use either absolute address or module RVA (relative to Starfield.exe base).
+experimental_papyrus_hook=false
+papyrus_hook_mode=invoke_callsite
+papyrus_registration_call_rva=0x0
+# papyrus_registration_call_address=0x140000000
+# Leave at 0 to auto-resolve NativeFunctionBase::Invoke via RTTI/vtable.
+papyrus_invoke_target_rva=0x0
+# Number of auto-discovered invoke callsites to patch in invoke_callsite mode.
+papyrus_invoke_autopatch_count=64
+# papyrus_invoke_callsite_rva=0x0
+papyrus_hook_verbose=false
