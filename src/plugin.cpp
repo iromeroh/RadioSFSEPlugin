@@ -33,10 +33,14 @@ __declspec(dllexport) SFSEPluginVersionData SFSEPlugin_Version = {
 };
 }
 
-static bool registerPapyrusPlaceholder()
+static bool registerPapyrusBridge(const SFSEInterface* sfse)
 {
-    g_papyrusBridge = std::make_unique<PapyrusBridge>(g_logger);
-    return g_papyrusBridge->initialize();
+    if (!g_engine) {
+        return false;
+    }
+
+    g_papyrusBridge = std::make_unique<PapyrusBridge>(g_logger, *g_engine);
+    return g_papyrusBridge->initialize(sfse);
 }
 
 extern "C" __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
@@ -55,7 +59,7 @@ extern "C" __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
         return false;
     }
 
-    (void)registerPapyrusPlaceholder();
+    (void)registerPapyrusBridge(sfse);
 
     g_logger.info("RadioSFSE loaded.");
     return true;

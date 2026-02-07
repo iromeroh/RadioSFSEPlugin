@@ -9,9 +9,9 @@ This milestone implements:
 - Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`
 - Distance-based volume fade using emitter/player coordinates
 - Text milestone logging
-- Experimental direct Papyrus registration hook capture (Address/RVA-configurable)
+- CommonLibSF-based Papyrus native registration on VM availability
 
-This milestone does **not** include final Papyrus native registration yet. It does include a direct hook path to capture the live VM/registry pointer, but ABI details for safe native registration are still unresolved in this local SDK.
+This milestone includes Papyrus native binding through `RE::BSScript::IVirtualMachine::BindNativeMethod` and no longer depends on manual callsite/vtable hook probing.
 
 ## Directory Model
 
@@ -53,13 +53,6 @@ Supported keys:
 - `max_fade_distance`
 - `auto_rescan_on_change_playlist`
 - `loop_playlist`
-- `experimental_papyrus_hook`
-- `papyrus_hook_mode`
-- `papyrus_registration_call_rva`
-- `papyrus_registration_call_address`
-- `papyrus_invoke_target_rva`
-- `papyrus_invoke_callsite_rva`
-- `papyrus_hook_verbose`
 
 ## Logs
 
@@ -74,9 +67,9 @@ Milestone markers:
 - `[M1]` engine + config
 - `[M2]` library scan
 - `[M3]` background worker
-- `[M4]` direct Papyrus hook install
-- `[M5]` Papyrus VM/registry pointer capture
-- `[M6]` native registration attempt checkpoint
+- `[M4]` SFSE messaging listener install
+- `[M5]` SFSE lifecycle message + VM availability tracking
+- `[M6]` Papyrus natives registered via CommonLibSF
 
 ## Build (Visual Studio / CMake)
 
@@ -110,10 +103,6 @@ The DLL currently exports callable C symbols:
 
 ## Next Integration Step
 
-Complete direct VM native registration (option 2):
-1. Set `experimental_papyrus_hook=true` and keep `papyrus_hook_mode=invoke_callsite`.
-2. Launch with SFSE and confirm `[M4]` auto-discovery logs.
-3. Trigger script-native activity and confirm `[M5]` VM/registry capture.
-4. Add resolved ABI addresses/signatures for VM `RegisterFunction` and native wrappers, then wire `PapyrusBridge::attemptNativeRegistration()`.
-
-`scripts/RadioSFSENative.psc` provides the intended native API surface.
+1. Launch via `sfse_loader.exe` and confirm `[M6]` appears in `RadioSFSE.log`.
+2. Attach a test Papyrus script that calls `RadioSFSENative` functions.
+3. Verify playback controls and fade updates from `set_positions`.

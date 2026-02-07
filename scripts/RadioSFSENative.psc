@@ -1,8 +1,6 @@
 Scriptname RadioSFSENative Hidden
 
-; Intended native API surface for SFSE binding.
-; Current milestone captures VM registration context via direct hook but
-; these natives are not bound until registration ABI is finalized.
+; Native API surface bound by RadioSFSE via CommonLibSF VM registration.
 
 Function change_playlist(ObjectReference activatorRef, String channelName) Global Native
 Function play(ObjectReference activatorRef) Global Native
