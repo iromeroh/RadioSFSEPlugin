@@ -2,11 +2,15 @@
 
 #include "logger.h"
 
+#include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,6 +32,7 @@ public:
     bool forward();
     bool rewind();
     bool rescanLibrary();
+    bool isPlaying() const;
 
     bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ);
 
@@ -70,8 +75,12 @@ private:
         std::size_t adIntervalSongs{ 3 };
         float minFadeDistance{ 150.0F };
         float maxFadeDistance{ 5000.0F };
+        bool enableSpatialPan{ true };
+        float panDistance{ 1200.0F };
+        bool logFadeChanges{ true };
         bool autoRescanOnChangePlaylist{ true };
         bool loopPlaylist{ true };
+        std::vector<std::pair<std::string, std::string>> streamStations;
     };
 
     struct ChannelEntry
@@ -80,6 +89,8 @@ private:
         std::string displayName;
         std::filesystem::path directoryPath;
         ChannelType type{ ChannelType::Playlist };
+        bool isStream{ false };
+        std::string streamUrl;
         std::vector<std::filesystem::path> songs;
         std::vector<std::filesystem::path> transitions;
         std::vector<std::filesystem::path> ads;
@@ -93,11 +104,14 @@ private:
     static std::wstring utf8ToWide(const std::string& text);
     static std::string wideToUtf8(const std::wstring& text);
     static std::wstring quoteForMCI(const std::filesystem::path& path);
+    static std::wstring quoteForMCI(const std::wstring& text);
 
     bool scanLibraryLocked();
+    void addConfiguredStreamsLocked();
     std::optional<ChannelEntry> lookupChannelLocked(const std::string& channelName) const;
     bool startCurrentLocked(PlaybackMode mode, bool resetPosition);
     bool playPathLocked(const std::filesystem::path& filePath);
+    bool playStreamLocked(const std::string& streamUrl);
     void stopPlaybackDeviceLocked(bool closeDevice);
     bool resumeLocked();
     bool pauseLocked();
@@ -113,6 +127,9 @@ private:
     bool mciCommandLocked(const std::wstring& command, std::wstring* output = nullptr);
     bool mciStatusNumberLocked(const std::wstring& statusName, int& outValue);
     bool mciStatusModeLocked(std::wstring& outMode);
+    bool mciStatusModeSilentLocked(std::wstring& outMode);
+    bool waitForAliasClosedLocked(std::chrono::milliseconds timeout);
+    bool runBoolCommand(const std::function<bool()>& command);
 
     void workerLoop();
 
@@ -122,6 +139,8 @@ private:
     std::thread worker_;
     bool workerRunning_{ false };
     bool stopWorker_{ false };
+    std::thread::id workerThreadId_{};
+    std::deque<std::function<void()>> commandQueue_{};
 
     Config config_{};
     std::map<std::string, ChannelEntry> channels_;
@@ -139,4 +158,10 @@ private:
     Position emitterPosition_{};
     Position playerPosition_{};
     int lastVolume_{ -1 };
+    int lastLeftVolume_{ -1 };
+    int lastRightVolume_{ -1 };
+    bool panControlsAvailable_{ true };
+    bool panUnavailableLogged_{ false };
+    std::chrono::steady_clock::time_point trackStartTime_{};
+    bool trackStartValid_{ false };
 };

@@ -6,10 +6,11 @@ This milestone implements:
 - Background worker thread (no periodic external tick required)
 - Directory scanner for playlists and stations
 - Track sequencing with station transitions + ad insertion
-- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`
-- Distance-based volume fade using emitter/player coordinates
+- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`
+- Distance-based fade plus stereo spatial pan (3D-like using emitter/player coordinates)
 - Text milestone logging
 - CommonLibSF-based Papyrus native registration on VM availability
+- Config-driven internet stream stations (URL-based, no simulated transitions/ads)
 
 This milestone includes Papyrus native binding through `RE::BSScript::IVirtualMachine::BindNativeMethod` and no longer depends on manual callsite/vtable hook probing.
 
@@ -21,6 +22,7 @@ Default radio root:
 Each subdirectory under root is treated as one channel:
 - `playlist`: contains only normal tracks
 - `station`: contains normal tracks + special prefixed files
+- `stream station`: configured in INI with URL, acts like station but plays live stream directly
 
 Default prefixes:
 - transition: `transition_`
@@ -51,8 +53,12 @@ Supported keys:
 - `ad_interval_songs`
 - `min_fade_distance`
 - `max_fade_distance`
+- `enable_spatial_pan`
+- `pan_distance`
+- `log_fade_changes`
 - `auto_rescan_on_change_playlist`
 - `loop_playlist`
+- `stream_station` (repeatable: `Name|Url`)
 
 ## Logs
 
@@ -98,8 +104,9 @@ The DLL currently exports callable C symbols:
 - `rewind()`
 - `rescan()`
 - `set_positions(float,float,float,float,float,float)`
+- `is_playing()`
 
-`set_positions` is the current hook point for activator/player distance fading until Papyrus native glue is wired.
+`set_positions` drives distance attenuation and stereo pan updates from activator/player coordinates.
 
 ## Papyrus Test Scripts
 

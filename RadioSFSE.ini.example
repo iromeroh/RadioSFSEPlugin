@@ -8,10 +8,18 @@ ad_prefix=ad_
 # Station behavior.
 ad_interval_songs=3
 
-# Distance fade in game units.
-min_fade_distance=150
-max_fade_distance=5000
+# Distance fade in game units. For interior/object-local radios, start with small values.
+min_fade_distance=0
+max_fade_distance=35
+enable_spatial_pan=true
+pan_distance=40
+log_fade_changes=true
 
 # Scan controls.
 auto_rescan_on_change_playlist=true
 loop_playlist=true
+
+# Optional internet stream stations (Name|Url). Repeat as needed.
+# They behave like station channels but without simulated ads/transitions.
+# stream_station=Space Wave|https://example.com/stream.mp3
+# stream_station=Nebula OGG|https://example.com/radio.ogg

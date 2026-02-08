@@ -122,17 +122,21 @@ extern "C" __declspec(dllexport) bool set_positions(
     return g_engine->setPositions(emitterX, emitterY, emitterZ, playerX, playerY, playerZ);
 }
 
-BOOL APIENTRY DllMain(HMODULE, DWORD reason, LPVOID)
+extern "C" __declspec(dllexport) bool is_playing()
 {
+    return g_engine ? g_engine->isPlaying() : false;
+}
+
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+{
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(module);
+    }
+
     if (reason == DLL_PROCESS_DETACH) {
-        if (g_papyrusBridge) {
-            g_papyrusBridge->shutdown();
-            g_papyrusBridge.reset();
-        }
-        if (g_engine) {
-            g_engine->shutdown();
-            g_engine.reset();
-        }
+        // Avoid blocking work in DllMain (loader lock). Process teardown will reclaim resources.
+        (void)g_papyrusBridge.release();
+        (void)g_engine.release();
     }
     return TRUE;
 }

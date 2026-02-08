@@ -12,3 +12,4 @@ EXPORTS
     rewind=radio_rewind
     rescan
     set_positions
+    is_playing

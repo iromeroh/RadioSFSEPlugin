@@ -5,7 +5,9 @@
 
 #include "sfse/PluginAPI.h"
 
+#include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <variant>
 
@@ -32,6 +34,7 @@ private:
 
     bool installMessagingListener(const SFSEInterface* sfse);
     bool tryRegisterNatives(const char* reason);
+    bool shouldAcceptCommand(const char* commandName, const void* activatorRef);
 
     static void nativeChangePlaylist(std::monostate, RE::TESObjectREFR* activatorRef, std::string channelName);
     static void nativePlay(std::monostate, RE::TESObjectREFR* activatorRef);
@@ -40,6 +43,7 @@ private:
     static void nativeStop(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeForward(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef);
+    static bool nativeIsPlaying(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeSetPositions(
         std::monostate,
         RE::TESObjectREFR* activatorRef,
@@ -56,4 +60,9 @@ private:
     bool installed_{ false };
     bool registered_{ false };
     bool waitingLogged_{ false };
+    std::mutex commandMutex_{};
+    std::string lastCommandName_{};
+    std::uintptr_t lastCommandRef_{ 0 };
+    std::chrono::steady_clock::time_point lastCommandTime_{};
+    std::chrono::milliseconds commandDebounce_{ 200 };
 };
