@@ -101,6 +101,18 @@ The DLL currently exports callable C symbols:
 
 `set_positions` is the current hook point for activator/player distance fading until Papyrus native glue is wired.
 
+## Papyrus Test Scripts
+
+Sample scripts in `scripts/` for quick CK wiring:
+- `scripts/RadioSFSE_AutostartQuestScript.psc`
+- `scripts/RadioSFSE_PlaySlateScript.psc`
+- `scripts/RadioSFSE_StopSlateScript.psc`
+
+Suggested quick test:
+1. Create an auto-start quest and attach `RadioSFSE_AutostartQuestScript`.
+2. Set `StartupPlaylist` to `Playlist_Default` and (optionally) assign `RadioEmitter`.
+3. Create two activator/slate objects with play/stop scripts for manual control.
+
 ## Next Integration Step
 
 1. Launch via `sfse_loader.exe` and confirm `[M6]` appears in `RadioSFSE.log`.

@@ -1,4 +1,5 @@
-Scriptname RadioSFSENative Hidden
+Scriptname RadioSFSENative Hidden Native
+
 
 ; Native API surface bound by RadioSFSE via CommonLibSF VM registration.
 
