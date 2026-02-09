@@ -137,11 +137,7 @@ Sample scripts in `scripts/` for quick CK wiring:
 
 Suggested quick test:
 1. Create an auto-start quest and attach `RadioSFSE_AutostartQuestScript`.
-2. Set `StartupPlaylist` to `Playlist_Default` and (optionally) assign `RadioEmitter`.
+2. Set `StartupPlaylist` to `Default` and (optionally) assign `RadioEmitter`.
 3. Create two activator/slate objects with play/stop scripts for manual control.
 
-## Next Integration Step
 
-1. Launch via `sfse_loader.exe` and confirm `[M6]` appears in `RadioSFSE.log`.
-2. Attach a test Papyrus script that calls `RadioSFSENative` functions.
-3. Verify playback controls and fade updates from `set_positions`.
