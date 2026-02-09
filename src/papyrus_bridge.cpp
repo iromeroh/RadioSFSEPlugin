@@ -163,6 +163,10 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "setFadeParams", &PapyrusBridge::nativeSetFadeParams, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeUp", &PapyrusBridge::nativeVolumeUp, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeDown", &PapyrusBridge::nativeVolumeDown, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getVolume", &PapyrusBridge::nativeGetVolume, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "setVolume", &PapyrusBridge::nativeSetVolume, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getTrack", &PapyrusBridge::nativeGetTrack, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "setTrack", &PapyrusBridge::nativeSetTrack, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "set_positions", &PapyrusBridge::nativeSetPositions, std::nullopt, false);
 
     registered_ = true;
@@ -395,6 +399,54 @@ bool PapyrusBridge::nativeVolumeDown(std::monostate, RE::TESObjectREFR* activato
     }
 
     return self->engine_.volumeDown(step, deviceKeyFromRef(activatorRef));
+}
+
+float PapyrusBridge::nativeGetVolume(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return 100.0F;
+    }
+
+    return self->engine_.getVolume(deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("setVolume", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.setVolume(volume, deviceKeyFromRef(activatorRef));
+}
+
+std::string PapyrusBridge::nativeGetTrack(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return {};
+    }
+
+    return self->engine_.getTrack(deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorRef, std::string trackBasename)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("setTrack", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.setTrack(trackBasename, deviceKeyFromRef(activatorRef));
 }
 
 void PapyrusBridge::nativeSetPositions(

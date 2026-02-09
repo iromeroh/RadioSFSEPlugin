@@ -17,6 +17,8 @@ namespace
 {
 constexpr wchar_t kAlias[] = L"RadioSFSE";
 constexpr float kMinimumFadeGap = 1.0F;
+constexpr float kDefaultVolumePercent = 100.0F;
+constexpr float kMaximumVolumePercent = 200.0F;
 
 std::string wideToUtf8Local(const std::wstring& text)
 {
@@ -478,6 +480,143 @@ bool RadioEngine::volumeDown(float step, std::uint64_t deviceId)
         logger_.info("volumeDown deviceId=" + std::to_string(currentDeviceId_) +
                      " gain=" + std::to_string(device.volumeGain));
         return true;
+    });
+}
+
+float RadioEngine::getVolume(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = deviceStates_.find(deviceId == currentDeviceId_ ? currentDeviceId_ : deviceId);
+    if (it == deviceStates_.end()) {
+        return kDefaultVolumePercent;
+    }
+
+    return std::clamp(it->second.volumeGain * kDefaultVolumePercent, 0.0F, kMaximumVolumePercent);
+}
+
+bool RadioEngine::setVolume(float volume, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, volume]() {
+        DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
+        const float clamped = std::clamp(volume, 0.0F, kMaximumVolumePercent);
+        device.volumeGain = clamped / kDefaultVolumePercent;
+        updateFadeVolumeLocked();
+        logger_.info("setVolume deviceId=" + std::to_string(currentDeviceId_) +
+                     " volume=" + std::to_string(clamped));
+        return true;
+    });
+}
+
+std::string RadioEngine::getTrack(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::string key;
+    std::size_t songIndex = 0;
+    std::filesystem::path trackPath;
+    if (deviceId == currentDeviceId_) {
+        key = selectedKey_;
+        songIndex = songIndex_;
+        trackPath = currentTrackPath_;
+    } else {
+        const auto stateIt = deviceStates_.find(deviceId);
+        if (stateIt == deviceStates_.end()) {
+            return {};
+        }
+
+        key = stateIt->second.selectedKey;
+        songIndex = stateIt->second.songIndex;
+        trackPath = stateIt->second.currentTrackPath;
+    }
+
+    if (key.empty()) {
+        return {};
+    }
+
+    const auto channelIt = channels_.find(key);
+    if (channelIt == channels_.end()) {
+        return {};
+    }
+
+    if (channelIt->second.isStream) {
+        return "na";
+    }
+
+    if (!trackPath.empty()) {
+        return pathToUtf8(trackPath.filename());
+    }
+
+    if (songIndex < channelIt->second.songs.size()) {
+        return pathToUtf8(channelIt->second.songs[songIndex].filename());
+    }
+
+    return {};
+}
+
+bool RadioEngine::setTrack(const std::string& trackBasename, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, trackBasename]() {
+        if (selectedKey_.empty()) {
+            logger_.warn("setTrack failed. No source selected.");
+            return false;
+        }
+
+        const auto channelIt = channels_.find(selectedKey_);
+        if (channelIt == channels_.end()) {
+            logger_.warn("setTrack failed. Selected source no longer exists.");
+            return false;
+        }
+
+        const auto& channel = channelIt->second;
+        if (channel.isStream) {
+            logger_.warn("setTrack failed. Streaming source has no local track list.");
+            return false;
+        }
+
+        const std::string needle = toLower(trim(trackBasename));
+        if (needle.empty()) {
+            logger_.warn("setTrack failed. Empty track basename.");
+            return false;
+        }
+
+        std::size_t foundIndex = channel.songs.size();
+        for (std::size_t i = 0; i < channel.songs.size(); ++i) {
+            const std::string fileNameLower = toLower(pathToUtf8(channel.songs[i].filename()));
+            const std::string stemLower = toLower(pathToUtf8(channel.songs[i].stem()));
+            if (needle == fileNameLower || needle == stemLower) {
+                foundIndex = i;
+                break;
+            }
+        }
+
+        if (foundIndex >= channel.songs.size()) {
+            logger_.warn("setTrack failed. Track not found in selected source: " + trackBasename);
+            return false;
+        }
+
+        const bool wasPlaying = state_ == PlaybackState::Playing;
+        if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+            stopPlaybackDeviceLocked(true);
+            state_ = PlaybackState::Stopped;
+            trackStartValid_ = false;
+            lastVolume_ = -1;
+            lastLeftVolume_ = -1;
+            lastRightVolume_ = -1;
+        }
+
+        songIndex_ = foundIndex;
+        currentTrackPath_ = channel.songs[foundIndex];
+        mode_ = channel.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+        previousWasSong_ = true;
+
+        logger_.info("setTrack selected: " + pathToUtf8(currentTrackPath_.filename()) +
+                     " (index=" + std::to_string(foundIndex) + ")");
+
+        if (!wasPlaying) {
+            return true;
+        }
+
+        return playPathLocked(currentTrackPath_);
     });
 }
 
@@ -1546,7 +1685,7 @@ RadioEngine::DeviceState& RadioEngine::ensureDeviceStateLocked(std::uint64_t dev
 
     DeviceState initial;
     initial.fadeOverride.enabled = false;
-    initial.volumeGain = 1.0F;
+    initial.volumeGain = kDefaultVolumePercent / 100.0F;
     auto [insertIt, inserted] = deviceStates_.emplace(deviceId, std::move(initial));
     (void)inserted;
     return insertIt->second;

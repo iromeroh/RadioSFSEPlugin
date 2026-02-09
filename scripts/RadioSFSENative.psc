@@ -17,6 +17,10 @@ Bool Function changeToNextSource(ObjectReference activatorRef, Int category) Glo
 Bool Function setFadeParams(ObjectReference activatorRef, Float minDistance, Float maxDistance, Float panDistance) Global Native
 Bool Function volumeUp(ObjectReference activatorRef, Float step) Global Native
 Bool Function volumeDown(ObjectReference activatorRef, Float step) Global Native
+Float Function getVolume(ObjectReference activatorRef) Global Native
+Bool Function setVolume(ObjectReference activatorRef, Float vol) Global Native
+String Function getTrack(ObjectReference activatorRef) Global Native
+Bool Function setTrack(ObjectReference activatorRef, String trackBasename) Global Native
 
 ; Activator/player positional data feed for fade calculations.
 Function set_positions(ObjectReference activatorRef, Float activatorX, Float activatorY, Float activatorZ, Float playerX, Float playerY, Float playerZ) Global Native

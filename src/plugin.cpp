@@ -158,6 +158,16 @@ extern "C" __declspec(dllexport) bool volume_down(float step)
     return g_engine ? g_engine->volumeDown(step) : false;
 }
 
+extern "C" __declspec(dllexport) float get_volume()
+{
+    return g_engine ? g_engine->getVolume() : 100.0F;
+}
+
+extern "C" __declspec(dllexport) bool set_volume(float volume)
+{
+    return g_engine ? g_engine->setVolume(volume) : false;
+}
+
 extern "C" __declspec(dllexport) const char* current_source_name()
 {
     if (!g_engine) {
@@ -176,6 +186,25 @@ extern "C" __declspec(dllexport) const char* current_track_basename()
 
     g_trackNameBuffer = g_engine->currentTrackBasename();
     return g_trackNameBuffer.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* get_track()
+{
+    if (!g_engine) {
+        return "";
+    }
+
+    g_trackNameBuffer = g_engine->getTrack();
+    return g_trackNameBuffer.c_str();
+}
+
+extern "C" __declspec(dllexport) bool set_track(const char* trackBasename)
+{
+    if (!g_engine || trackBasename == nullptr) {
+        return false;
+    }
+
+    return g_engine->setTrack(trackBasename);
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)

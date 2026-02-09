@@ -39,6 +39,10 @@ public:
     bool setFadeParams(float minDistance, float maxDistance, float panDistance, std::uint64_t deviceId = 0);
     bool volumeUp(float step, std::uint64_t deviceId = 0);
     bool volumeDown(float step, std::uint64_t deviceId = 0);
+    float getVolume(std::uint64_t deviceId = 0) const;
+    bool setVolume(float volume, std::uint64_t deviceId = 0);
+    std::string getTrack(std::uint64_t deviceId = 0) const;
+    bool setTrack(const std::string& trackBasename, std::uint64_t deviceId = 0);
 
     bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId = 0);
 

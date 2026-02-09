@@ -17,5 +17,9 @@ EXPORTS
     set_fade_params
     volume_up
     volume_down
+    get_volume
+    set_volume
     current_source_name
     current_track_basename
+    get_track
+    set_track
