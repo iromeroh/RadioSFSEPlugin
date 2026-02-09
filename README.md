@@ -4,15 +4,26 @@
 
 This milestone implements:
 - Background worker thread (no periodic external tick required)
-- Directory scanner for playlists and stations
+- Directory scanner for structured playlist/station folders
 - Track sequencing with station transitions + ad insertion
-- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`
+- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`
 - Distance-based fade plus stereo spatial pan (3D-like using emitter/player coordinates)
 - Text milestone logging
 - CommonLibSF-based Papyrus native registration on VM availability
-- Config-driven internet stream stations (URL-based, no simulated transitions/ads)
+- Config-driven internet stream stations (direct stream URLs, no simulated transitions/ads)
 
 This milestone includes Papyrus native binding through `RE::BSScript::IVirtualMachine::BindNativeMethod` and no longer depends on manual callsite/vtable hook probing.
+Playback/session state is tracked per activator reference for the current game session (not persisted across saves).
+
+Category values for `changeToNextSource`:
+- `1` = playlists (`Playlists/<Name>`)
+- `2` = stations (`Stations/<Name>`)
+- `3` = stream stations (INI `stream_station` declaration order)
+
+Per-device control notes:
+- `setFadeParams(ref, min, max, pan)` overrides fade distances for that specific device/ref.
+- Pass any negative parameter to `setFadeParams` to reset that device to global INI defaults.
+- `volumeUp(ref, step)` / `volumeDown(ref, step)` adjust per-device gain for current session.
 
 ## Directory Model
 
@@ -20,8 +31,8 @@ Default radio root:
 - `%USERPROFILE%\\OneDrive\\Documentos\\My Games\\Starfield\\Data\\Radio`
 
 Each subdirectory under root is treated as one channel:
-- `playlist`: contains only normal tracks
-- `station`: contains normal tracks + special prefixed files
+- `Playlists/<Name>`: one playlist source per directory
+- `Stations/<Name>`: one station source per directory
 - `stream station`: configured in INI with URL, acts like station but plays live stream directly
 
 Default prefixes:
@@ -31,14 +42,16 @@ Default prefixes:
 Example:
 ```text
 Radio/
-  ChillPlaylist/
-    track01.mp3
-    track02.mp3
-  NewAtlantisFM/
-    song01.mp3
-    song02.mp3
-    transition_sweep01.mp3
-    ad_shipyard01.mp3
+  Playlists/
+    ChillPlaylist/
+      track01.mp3
+      track02.mp3
+  Stations/
+    NewAtlantisFM/
+      song01.mp3
+      song02.mp3
+      transition_sweep01.mp3
+      ad_shipyard01.mp3
 ```
 
 ## Config
@@ -59,6 +72,7 @@ Supported keys:
 - `auto_rescan_on_change_playlist`
 - `loop_playlist`
 - `stream_station` (repeatable: `Name|Url`)
+  - Url should be a direct media/stream URL (for example mp3/ogg stream endpoints)
 
 ## Logs
 
@@ -105,6 +119,12 @@ The DLL currently exports callable C symbols:
 - `rescan()`
 - `set_positions(float,float,float,float,float,float)`
 - `is_playing()`
+- `change_to_next_source(int)`
+- `set_fade_params(float,float,float)`
+- `volume_up(float)`
+- `volume_down(float)`
+- `current_source_name()`
+- `current_track_basename()`
 
 `set_positions` drives distance attenuation and stereo pan updates from activator/player coordinates.
 

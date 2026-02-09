@@ -13,3 +13,9 @@ EXPORTS
     rescan
     set_positions
     is_playing
+    change_to_next_source
+    set_fade_params
+    volume_up
+    volume_down
+    current_source_name
+    current_track_basename

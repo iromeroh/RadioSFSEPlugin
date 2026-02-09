@@ -1,4 +1,7 @@
 # Radio root. Environment variables are allowed.
+# Expected layout:
+#   %root_path%\Playlists\<PlaylistName>\*.mp3
+#   %root_path%\Stations\<StationName>\*.mp3
 root_path=%USERPROFILE%\OneDrive\Documentos\My Games\Starfield\Data\Radio
 
 # Station special-file prefixes.
@@ -21,5 +24,6 @@ loop_playlist=true
 
 # Optional internet stream stations (Name|Url). Repeat as needed.
 # They behave like station channels but without simulated ads/transitions.
+# Use direct stream URLs (for example .mp3 or .ogg endpoints).
 # stream_station=Space Wave|https://example.com/stream.mp3
 # stream_station=Nebula OGG|https://example.com/radio.ogg

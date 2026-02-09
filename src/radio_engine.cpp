@@ -9,7 +9,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <sstream>
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -18,6 +17,31 @@ namespace
 {
 constexpr wchar_t kAlias[] = L"RadioSFSE";
 constexpr float kMinimumFadeGap = 1.0F;
+
+std::string wideToUtf8Local(const std::wstring& text)
+{
+    if (text.empty()) {
+        return {};
+    }
+
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) {
+        return {};
+    }
+
+    std::string out(static_cast<std::size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+std::string pathToUtf8(const std::filesystem::path& path)
+{
+#ifdef _WIN32
+    return wideToUtf8Local(path.wstring());
+#else
+    return path.string();
+#endif
+}
 
 std::filesystem::path defaultRadioRoot()
 {
@@ -88,6 +112,8 @@ bool RadioEngine::initialize()
         logger_.info("[M3] Background worker started.");
     }
 
+    syncCurrentDeviceStateLocked();
+
     return true;
 }
 
@@ -103,11 +129,12 @@ void RadioEngine::shutdown()
         return;
     }
 
-    (void)runBoolCommand([this]() {
+    (void)runBoolCommandForDevice(currentDeviceId_, [this]() {
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         mode_ = PlaybackMode::None;
         trackStartValid_ = false;
+        syncCurrentDeviceStateLocked();
         return true;
     });
 
@@ -131,9 +158,9 @@ void RadioEngine::shutdown()
     logger_.info("Radio engine shut down.");
 }
 
-bool RadioEngine::changePlaylist(const std::string& channelName)
+bool RadioEngine::changePlaylist(const std::string& channelName, std::uint64_t deviceId)
 {
-    return runBoolCommand([this, channelName]() {
+    return runBoolCommandForDevice(deviceId, [this, channelName]() {
         if (config_.autoRescanOnChangePlaylist) {
             scanLibraryLocked();
         }
@@ -161,15 +188,20 @@ bool RadioEngine::changePlaylist(const std::string& channelName)
         trackStartValid_ = false;
 
         stopPlaybackDeviceLocked(true);
-        logger_.info("change_playlist selected: " + channel->displayName +
-                     " (" + (channel->type == ChannelType::Station ? "station" : "playlist") + ")");
+        std::string sourceType = "playlist";
+        if (channel->isStream) {
+            sourceType = "stream";
+        } else if (channel->type == ChannelType::Station) {
+            sourceType = "station";
+        }
+        logger_.info("change_playlist selected: " + channel->displayName + " (" + sourceType + ")");
         return true;
     });
 }
 
-bool RadioEngine::play()
+bool RadioEngine::play(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         if (selectedKey_.empty()) {
             logger_.warn("play failed. No channel selected.");
             return false;
@@ -192,9 +224,9 @@ bool RadioEngine::play()
     });
 }
 
-bool RadioEngine::start()
+bool RadioEngine::start(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         if (selectedKey_.empty()) {
             logger_.warn("start failed. No channel selected.");
             return false;
@@ -215,16 +247,16 @@ bool RadioEngine::start()
     });
 }
 
-bool RadioEngine::pause()
+bool RadioEngine::pause(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         return pauseLocked();
     });
 }
 
-bool RadioEngine::stop()
+bool RadioEngine::stop(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         mode_ = PlaybackMode::None;
@@ -246,23 +278,23 @@ bool RadioEngine::stop()
     });
 }
 
-bool RadioEngine::forward()
+bool RadioEngine::forward(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         return forwardLocked();
     });
 }
 
-bool RadioEngine::rewind()
+bool RadioEngine::rewind(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         return rewindLocked();
     });
 }
 
-bool RadioEngine::rescanLibrary()
+bool RadioEngine::rescanLibrary(std::uint64_t deviceId)
 {
-    return runBoolCommand([this]() {
+    return runBoolCommandForDevice(deviceId, [this]() {
         const bool ok = scanLibraryLocked();
         if (ok) {
             logger_.info("Library rescan complete. Channels: " + std::to_string(channels_.size()));
@@ -273,15 +305,121 @@ bool RadioEngine::rescanLibrary()
     });
 }
 
-bool RadioEngine::isPlaying() const
+bool RadioEngine::isPlaying(std::uint64_t deviceId) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return state_ == PlaybackState::Playing;
+    if (deviceId == currentDeviceId_) {
+        return state_ == PlaybackState::Playing;
+    }
+
+    const auto it = deviceStates_.find(deviceId);
+    if (it == deviceStates_.end()) {
+        return false;
+    }
+    return it->second.state == PlaybackState::Playing;
 }
 
-bool RadioEngine::setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ)
+bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
 {
-    return runBoolCommand([this, emitterX, emitterY, emitterZ, playerX, playerY, playerZ]() {
+    return runBoolCommandForDevice(deviceId, [this, category]() {
+        if (config_.autoRescanOnChangePlaylist) {
+            scanLibraryLocked();
+        }
+
+        struct Candidate
+        {
+            std::string key;
+            std::string displayName;
+        };
+
+        std::vector<Candidate> candidates;
+        auto addCandidate = [&candidates](const std::string& key, const std::string& displayName) {
+            candidates.push_back(Candidate{ key, displayName });
+        };
+
+        if (category == 1 || category == 2) {
+            for (const auto& [key, entry] : channels_) {
+                if (entry.isStream) {
+                    continue;
+                }
+                if (category == 1 && entry.type == ChannelType::Playlist) {
+                    addCandidate(key, entry.displayName);
+                } else if (category == 2 && entry.type == ChannelType::Station) {
+                    addCandidate(key, entry.displayName);
+                }
+            }
+
+            std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
+                return toLower(a.displayName) < toLower(b.displayName);
+            });
+        } else if (category == 3) {
+            for (const auto& key : streamOrderKeys_) {
+                const auto it = channels_.find(key);
+                if (it == channels_.end() || !it->second.isStream) {
+                    continue;
+                }
+                addCandidate(it->first, it->second.displayName);
+            }
+        } else {
+            logger_.warn("changeToNextSource failed. Invalid category: " + std::to_string(category));
+            return false;
+        }
+
+        if (candidates.empty()) {
+            logger_.warn("changeToNextSource failed. No sources for category: " + std::to_string(category));
+            return false;
+        }
+
+        std::size_t nextIndex = 0;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            if (candidates[i].key == selectedKey_) {
+                nextIndex = (i + 1) % candidates.size();
+                break;
+            }
+        }
+
+        const auto channelIt = channels_.find(candidates[nextIndex].key);
+        if (channelIt == channels_.end()) {
+            return false;
+        }
+
+        selectedKey_ = channelIt->first;
+        mode_ = PlaybackMode::None;
+        state_ = PlaybackState::Stopped;
+        songIndex_ = 0;
+        transitionIndex_ = 0;
+        adIndex_ = 0;
+        songsSinceAd_ = 0;
+        previousWasSong_ = false;
+        currentTrackPath_.clear();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
+        panControlsAvailable_ = true;
+        panUnavailableLogged_ = false;
+        trackStartValid_ = false;
+
+        stopPlaybackDeviceLocked(true);
+
+        std::string sourceType = "playlist";
+        if (channelIt->second.isStream) {
+            sourceType = "stream";
+        } else if (channelIt->second.type == ChannelType::Station) {
+            sourceType = "station";
+        }
+
+        logger_.info("changeToNextSource selected: " + channelIt->second.displayName +
+                     " (" + sourceType + ", category=" + std::to_string(category) + ")");
+
+        const PlaybackMode desiredMode =
+            channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+        return startCurrentLocked(desiredMode, true);
+    });
+}
+
+bool RadioEngine::setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, emitterX, emitterY, emitterZ, playerX, playerY, playerZ]() {
         emitterPosition_ = Position{ emitterX, emitterY, emitterZ };
         playerPosition_ = Position{ playerX, playerY, playerZ };
         updateFadeVolumeLocked();
@@ -289,10 +427,120 @@ bool RadioEngine::setPositions(float emitterX, float emitterY, float emitterZ, f
     });
 }
 
-std::string RadioEngine::currentChannel() const
+bool RadioEngine::setFadeParams(float minDistance, float maxDistance, float panDistance, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, minDistance, maxDistance, panDistance]() {
+        DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
+        if (minDistance < 0.0F || maxDistance < 0.0F || panDistance < 0.0F) {
+            device.fadeOverride.enabled = false;
+            updateFadeVolumeLocked();
+            logger_.info("setFadeParams reset to defaults for deviceId=" + std::to_string(currentDeviceId_));
+            return true;
+        }
+
+        const float minDist = minDistance;
+        const float maxDist = std::max(maxDistance, minDist + kMinimumFadeGap);
+        const float panDist = std::max(panDistance, kMinimumFadeGap);
+
+        device.fadeOverride.enabled = true;
+        device.fadeOverride.minDistance = minDist;
+        device.fadeOverride.maxDistance = maxDist;
+        device.fadeOverride.panDistance = panDist;
+        updateFadeVolumeLocked();
+        logger_.info("setFadeParams deviceId=" + std::to_string(currentDeviceId_) +
+                     " min=" + std::to_string(minDist) +
+                     " max=" + std::to_string(maxDist) +
+                     " pan=" + std::to_string(panDist));
+        return true;
+    });
+}
+
+bool RadioEngine::volumeUp(float step, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, step]() {
+        DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
+        const float delta = step > 0.0F ? step : 0.1F;
+        device.volumeGain = std::clamp(device.volumeGain + delta, 0.0F, 2.0F);
+        updateFadeVolumeLocked();
+        logger_.info("volumeUp deviceId=" + std::to_string(currentDeviceId_) +
+                     " gain=" + std::to_string(device.volumeGain));
+        return true;
+    });
+}
+
+bool RadioEngine::volumeDown(float step, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, step]() {
+        DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
+        const float delta = step > 0.0F ? step : 0.1F;
+        device.volumeGain = std::clamp(device.volumeGain - delta, 0.0F, 2.0F);
+        updateFadeVolumeLocked();
+        logger_.info("volumeDown deviceId=" + std::to_string(currentDeviceId_) +
+                     " gain=" + std::to_string(device.volumeGain));
+        return true;
+    });
+}
+
+std::string RadioEngine::currentChannel(std::uint64_t deviceId) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return selectedKey_;
+    if (deviceId == currentDeviceId_) {
+        return selectedKey_;
+    }
+
+    const auto it = deviceStates_.find(deviceId);
+    if (it == deviceStates_.end()) {
+        return {};
+    }
+    return it->second.selectedKey;
+}
+
+std::string RadioEngine::currentSourceName(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string key = (deviceId == currentDeviceId_)
+        ? selectedKey_
+        : [this, deviceId]() -> std::string {
+              const auto stateIt = deviceStates_.find(deviceId);
+              return stateIt != deviceStates_.end() ? stateIt->second.selectedKey : std::string{};
+          }();
+
+    if (key.empty()) {
+        return {};
+    }
+
+    const auto it = channels_.find(key);
+    if (it == channels_.end()) {
+        return {};
+    }
+
+    return it->second.displayName;
+}
+
+std::string RadioEngine::currentTrackBasename(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (deviceId == currentDeviceId_) {
+        if (state_ != PlaybackState::Playing && state_ != PlaybackState::Paused) {
+            return {};
+        }
+        if (currentTrackPath_.empty()) {
+            return {};
+        }
+        return pathToUtf8(currentTrackPath_.filename());
+    }
+
+    const auto it = deviceStates_.find(deviceId);
+    if (it == deviceStates_.end()) {
+        return {};
+    }
+    if (it->second.state != PlaybackState::Playing && it->second.state != PlaybackState::Paused) {
+        return {};
+    }
+    if (it->second.currentTrackPath.empty()) {
+        return {};
+    }
+    return pathToUtf8(it->second.currentTrackPath.filename());
 }
 
 std::size_t RadioEngine::channelCount() const
@@ -308,13 +556,13 @@ bool RadioEngine::loadConfig()
 
     const auto path = configPath();
     if (!std::filesystem::exists(path)) {
-        logger_.warn("Config not found at " + path.string() + ". Using defaults.");
+        logger_.warn("Config not found at " + pathToUtf8(path) + ". Using defaults.");
         return false;
     }
 
     std::ifstream in(path);
     if (!in.is_open()) {
-        logger_.warn("Could not open config file: " + path.string());
+        logger_.warn("Could not open config file: " + pathToUtf8(path));
         return false;
     }
 
@@ -389,7 +637,7 @@ bool RadioEngine::loadConfig()
         config_.panDistance = kMinimumFadeGap;
     }
 
-    logger_.info("Config loaded. root_path=" + config_.radioRootPath.string() +
+    logger_.info("Config loaded. root_path=" + pathToUtf8(config_.radioRootPath) +
                  ", spatial_pan=" + std::string(config_.enableSpatialPan ? "true" : "false") +
                  ", pan_distance=" + std::to_string(config_.panDistance));
     return true;
@@ -425,7 +673,7 @@ std::string RadioEngine::toLower(std::string text)
 
 bool RadioEngine::hasAudioExtension(const std::filesystem::path& path)
 {
-    const std::string ext = toLower(path.extension().string());
+    const std::string ext = toLower(pathToUtf8(path.extension()));
     return ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac";
 }
 
@@ -478,34 +726,57 @@ std::wstring RadioEngine::quoteForMCI(const std::wstring& text)
 bool RadioEngine::scanLibraryLocked()
 {
     channels_.clear();
+    streamOrderKeys_.clear();
 
     const std::string transitionPrefixLower = toLower(config_.transitionPrefix);
     const std::string adPrefixLower = toLower(config_.adPrefix);
 
-    if (config_.radioRootPath.empty() || !std::filesystem::exists(config_.radioRootPath)) {
-        logger_.warn("Radio root path does not exist: " + config_.radioRootPath.string());
-    } else {
+    const auto scanCategory = [this, &transitionPrefixLower, &adPrefixLower](
+                                  const std::filesystem::path& categoryRoot,
+                                  const char* keyPrefix,
+                                  ChannelType channelType) {
+        if (!std::filesystem::exists(categoryRoot)) {
+            logger_.warn("Category root path does not exist: " + pathToUtf8(categoryRoot));
+            return;
+        }
+        if (!std::filesystem::is_directory(categoryRoot)) {
+            logger_.warn("Category root is not a directory: " + pathToUtf8(categoryRoot));
+            return;
+        }
+
         std::error_code ec;
-        for (std::filesystem::recursive_directory_iterator it(config_.radioRootPath, ec), end; it != end && !ec; it.increment(ec)) {
-            if (!it->is_directory()) {
+        for (std::filesystem::directory_iterator sourceIt(categoryRoot, ec), sourceEnd; sourceIt != sourceEnd && !ec; sourceIt.increment(ec)) {
+            if (!sourceIt->is_directory()) {
                 continue;
             }
 
-            const auto dirPath = it->path();
+            const auto sourcePath = sourceIt->path();
+            const std::string sourceName = pathToUtf8(sourcePath.filename());
+            if (sourceName.empty()) {
+                continue;
+            }
+
             std::vector<std::filesystem::path> songs;
             std::vector<std::filesystem::path> transitions;
             std::vector<std::filesystem::path> ads;
 
-            for (std::filesystem::directory_iterator fileIt(dirPath, ec), fileEnd; fileIt != fileEnd && !ec; fileIt.increment(ec)) {
+            std::error_code fileEc;
+            for (std::filesystem::directory_iterator fileIt(sourcePath, fileEc), fileEnd; fileIt != fileEnd && !fileEc; fileIt.increment(fileEc)) {
                 if (!fileIt->is_regular_file()) {
                     continue;
                 }
+
                 const auto filePath = fileIt->path();
                 if (!hasAudioExtension(filePath)) {
                     continue;
                 }
 
-                const std::string stemLower = toLower(filePath.stem().string());
+                if (channelType == ChannelType::Playlist) {
+                    songs.push_back(filePath);
+                    continue;
+                }
+
+                const std::string stemLower = toLower(pathToUtf8(filePath.stem()));
                 if (!transitionPrefixLower.empty() && stemLower.starts_with(transitionPrefixLower)) {
                     transitions.push_back(filePath);
                 } else if (!adPrefixLower.empty() && stemLower.starts_with(adPrefixLower)) {
@@ -523,28 +794,25 @@ bool RadioEngine::scanLibraryLocked()
             std::sort(transitions.begin(), transitions.end());
             std::sort(ads.begin(), ads.end());
 
-            std::filesystem::path rel = std::filesystem::relative(dirPath, config_.radioRootPath, ec);
-            if (ec) {
-                rel = dirPath.filename();
-                ec.clear();
-            }
-
-            std::string key = toLower(rel.generic_string());
-            if (key.empty()) {
-                key = toLower(dirPath.filename().string());
-            }
-
+            const std::string key = std::string(keyPrefix) + "/" + toLower(sourceName);
             ChannelEntry entry;
             entry.key = key;
-            entry.displayName = rel.generic_string();
-            entry.directoryPath = dirPath;
-            entry.type = (!transitions.empty() || !ads.empty()) ? ChannelType::Station : ChannelType::Playlist;
+            entry.displayName = sourceName;
+            entry.directoryPath = sourcePath;
+            entry.type = channelType;
             entry.songs = std::move(songs);
             entry.transitions = std::move(transitions);
             entry.ads = std::move(ads);
 
             channels_[key] = std::move(entry);
         }
+    };
+
+    if (config_.radioRootPath.empty() || !std::filesystem::exists(config_.radioRootPath)) {
+        logger_.warn("Radio root path does not exist: " + pathToUtf8(config_.radioRootPath));
+    } else {
+        scanCategory(config_.radioRootPath / "Playlists", "playlist", ChannelType::Playlist);
+        scanCategory(config_.radioRootPath / "Stations", "station", ChannelType::Station);
     }
 
     addConfiguredStreamsLocked();
@@ -554,7 +822,7 @@ bool RadioEngine::scanLibraryLocked()
 void RadioEngine::addConfiguredStreamsLocked()
 {
     for (const auto& [name, url] : config_.streamStations) {
-        const std::string key = toLower(trim(name));
+        const std::string key = "stream/" + toLower(trim(name));
         if (key.empty() || url.empty()) {
             continue;
         }
@@ -566,20 +834,50 @@ void RadioEngine::addConfiguredStreamsLocked()
         entry.isStream = true;
         entry.streamUrl = url;
 
+        if (std::find(streamOrderKeys_.begin(), streamOrderKeys_.end(), key) == streamOrderKeys_.end()) {
+            streamOrderKeys_.push_back(key);
+        }
         channels_[key] = std::move(entry);
     }
 }
 
 std::optional<RadioEngine::ChannelEntry> RadioEngine::lookupChannelLocked(const std::string& channelName) const
 {
-    const std::string key = toLower(trim(channelName));
+    std::string key = toLower(trim(channelName));
     if (key.empty()) {
         return std::nullopt;
+    }
+
+    if (key.starts_with("playlists/")) {
+        key = "playlist/" + key.substr(std::string("playlists/").size());
+    } else if (key.starts_with("stations/")) {
+        key = "station/" + key.substr(std::string("stations/").size());
     }
 
     auto it = channels_.find(key);
     if (it != channels_.end()) {
         return it->second;
+    }
+
+    std::vector<std::string> prefixedKeys = {
+        "playlist/" + key,
+        "station/" + key,
+        "stream/" + key
+    };
+
+    std::optional<ChannelEntry> uniqueMatch;
+    for (const auto& candidate : prefixedKeys) {
+        const auto byPrefix = channels_.find(candidate);
+        if (byPrefix == channels_.end()) {
+            continue;
+        }
+        if (uniqueMatch.has_value()) {
+            return std::nullopt;
+        }
+        uniqueMatch = byPrefix->second;
+    }
+    if (uniqueMatch.has_value()) {
+        return uniqueMatch;
     }
 
     for (const auto& [mapKey, entry] : channels_) {
@@ -669,7 +967,7 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     trackStartValid_ = true;
     updateFadeVolumeLocked();
 
-    logger_.info("Now playing: " + filePath.string());
+    logger_.info("Now playing: " + pathToUtf8(filePath));
     return true;
 }
 
@@ -680,7 +978,19 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         logger_.warn("MCI alias still open before stream play. Attempting reopen anyway.");
     }
 
-    const std::wstring quotedUrl = quoteForMCI(utf8ToWide(streamUrl));
+    const std::string directUrl = trim(streamUrl);
+    if (directUrl.empty()) {
+        logger_.warn("Stream play failed: empty URL.");
+        state_ = PlaybackState::Stopped;
+        currentTrackPath_.clear();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
+        trackStartValid_ = false;
+        return false;
+    }
+
+    const std::wstring quotedUrl = quoteForMCI(utf8ToWide(directUrl));
 
     if (!mciCommandLocked(L"open " + quotedUrl + L" alias " + kAlias)) {
         if (!mciCommandLocked(L"open " + quotedUrl + L" type mpegvideo alias " + kAlias)) {
@@ -712,7 +1022,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
     trackStartValid_ = true;
     updateFadeVolumeLocked();
 
-    logger_.info("Now streaming: " + streamUrl);
+    logger_.info("Now streaming: " + directUrl);
     return true;
 }
 
@@ -1011,9 +1321,11 @@ void RadioEngine::updateFadeVolumeLocked()
         return;
     }
 
+    DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
     const double distance = distanceLocked();
-    const float minDist = config_.minFadeDistance;
-    const float maxDist = config_.maxFadeDistance;
+    const float minDist = device.fadeOverride.enabled ? device.fadeOverride.minDistance : config_.minFadeDistance;
+    const float maxDist = device.fadeOverride.enabled ? device.fadeOverride.maxDistance : config_.maxFadeDistance;
+    const float panDist = device.fadeOverride.enabled ? device.fadeOverride.panDistance : config_.panDistance;
 
     double factor = 0.0;
     if (distance <= minDist) {
@@ -1026,14 +1338,15 @@ void RadioEngine::updateFadeVolumeLocked()
         factor *= factor;
     }
 
-    const int volume = static_cast<int>(std::lround(std::clamp(factor, 0.0, 1.0) * 1000.0));
+    const double gain = std::clamp(static_cast<double>(device.volumeGain), 0.0, 2.0);
+    const int volume = static_cast<int>(std::lround(std::clamp(factor * gain, 0.0, 1.0) * 1000.0));
 
     double pan = 0.0;
     int leftVolume = volume;
     int rightVolume = volume;
-    if (config_.enableSpatialPan && config_.panDistance > kMinimumFadeGap) {
+    if (config_.enableSpatialPan && panDist > kMinimumFadeGap) {
         const double dx = static_cast<double>(emitterPosition_.x) - static_cast<double>(playerPosition_.x);
-        pan = std::clamp(dx / static_cast<double>(config_.panDistance), -1.0, 1.0);
+        pan = std::clamp(dx / static_cast<double>(panDist), -1.0, 1.0);
 
         // Equal-power stereo pan curve for smoother perceived loudness.
         const double angle = (pan + 1.0) * (std::acos(-1.0) / 4.0);
@@ -1083,7 +1396,8 @@ void RadioEngine::updateFadeVolumeLocked()
             " baseVol=" + std::to_string(volume) +
             " leftVol=" + std::to_string(leftVolume) +
             " rightVol=" + std::to_string(rightVolume) +
-            " pan=" + std::to_string(pan));
+            " pan=" + std::to_string(pan) +
+            " gain=" + std::to_string(device.volumeGain));
     }
 }
 
@@ -1166,16 +1480,121 @@ bool RadioEngine::waitForAliasClosedLocked(std::chrono::milliseconds timeout)
     return !mciStatusModeSilentLocked(mode);
 }
 
-bool RadioEngine::runBoolCommand(const std::function<bool()>& command)
+RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
+{
+    DeviceState snapshot;
+    const auto it = deviceStates_.find(currentDeviceId_);
+    if (it != deviceStates_.end()) {
+        snapshot.fadeOverride = it->second.fadeOverride;
+        snapshot.volumeGain = it->second.volumeGain;
+    }
+
+    snapshot.selectedKey = selectedKey_;
+    snapshot.mode = mode_;
+    snapshot.state = state_;
+    snapshot.currentTrackPath = currentTrackPath_;
+    snapshot.songIndex = songIndex_;
+    snapshot.transitionIndex = transitionIndex_;
+    snapshot.adIndex = adIndex_;
+    snapshot.songsSinceAd = songsSinceAd_;
+    snapshot.previousWasSong = previousWasSong_;
+    snapshot.emitterPosition = emitterPosition_;
+    snapshot.playerPosition = playerPosition_;
+    snapshot.lastVolume = lastVolume_;
+    snapshot.lastLeftVolume = lastLeftVolume_;
+    snapshot.lastRightVolume = lastRightVolume_;
+    snapshot.panControlsAvailable = panControlsAvailable_;
+    snapshot.panUnavailableLogged = panUnavailableLogged_;
+    snapshot.trackStartTime = trackStartTime_;
+    snapshot.trackStartValid = trackStartValid_;
+    return snapshot;
+}
+
+void RadioEngine::applyDeviceStateLocked(const DeviceState& state)
+{
+    selectedKey_ = state.selectedKey;
+    mode_ = state.mode;
+    state_ = state.state;
+    currentTrackPath_ = state.currentTrackPath;
+    songIndex_ = state.songIndex;
+    transitionIndex_ = state.transitionIndex;
+    adIndex_ = state.adIndex;
+    songsSinceAd_ = state.songsSinceAd;
+    previousWasSong_ = state.previousWasSong;
+    emitterPosition_ = state.emitterPosition;
+    playerPosition_ = state.playerPosition;
+    lastVolume_ = state.lastVolume;
+    lastLeftVolume_ = state.lastLeftVolume;
+    lastRightVolume_ = state.lastRightVolume;
+    panControlsAvailable_ = state.panControlsAvailable;
+    panUnavailableLogged_ = state.panUnavailableLogged;
+    trackStartTime_ = state.trackStartTime;
+    trackStartValid_ = state.trackStartValid;
+}
+
+void RadioEngine::syncCurrentDeviceStateLocked()
+{
+    deviceStates_[currentDeviceId_] = makeCurrentDeviceStateLocked();
+}
+
+RadioEngine::DeviceState& RadioEngine::ensureDeviceStateLocked(std::uint64_t deviceId)
+{
+    auto it = deviceStates_.find(deviceId);
+    if (it != deviceStates_.end()) {
+        return it->second;
+    }
+
+    DeviceState initial;
+    initial.fadeOverride.enabled = false;
+    initial.volumeGain = 1.0F;
+    auto [insertIt, inserted] = deviceStates_.emplace(deviceId, std::move(initial));
+    (void)inserted;
+    return insertIt->second;
+}
+
+void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
+{
+    if (deviceId == currentDeviceId_) {
+        ensureDeviceStateLocked(deviceId);
+        return;
+    }
+
+    syncCurrentDeviceStateLocked();
+
+    if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+        stopPlaybackDeviceLocked(true);
+        state_ = PlaybackState::Stopped;
+        trackStartValid_ = false;
+        syncCurrentDeviceStateLocked();
+    }
+
+    currentDeviceId_ = deviceId;
+    DeviceState& target = ensureDeviceStateLocked(deviceId);
+    applyDeviceStateLocked(target);
+
+    // Audio device is global; after switching refs we keep session state but require explicit play/start.
+    if (state_ != PlaybackState::Stopped) {
+        state_ = PlaybackState::Stopped;
+        trackStartValid_ = false;
+    }
+}
+
+bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command)
 {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!workerRunning_) {
-        return command();
+        switchToDeviceLocked(deviceId);
+        const bool result = command();
+        syncCurrentDeviceStateLocked();
+        return result;
     }
 
     if (std::this_thread::get_id() == workerThreadId_) {
-        return command();
+        switchToDeviceLocked(deviceId);
+        const bool result = command();
+        syncCurrentDeviceStateLocked();
+        return result;
     }
 
     struct PendingResult
@@ -1185,8 +1604,18 @@ bool RadioEngine::runBoolCommand(const std::function<bool()>& command)
     };
 
     auto pending = std::make_shared<PendingResult>();
-    commandQueue_.emplace_back([this, command, pending]() {
-        pending->result = command();
+    commandQueue_.emplace_back([this, command, pending, deviceId]() {
+        try {
+            switchToDeviceLocked(deviceId);
+            pending->result = command();
+        } catch (const std::exception& ex) {
+            pending->result = false;
+            logger_.error(std::string("Unhandled exception in queued command: ") + ex.what());
+        } catch (...) {
+            pending->result = false;
+            logger_.error("Unhandled unknown exception in queued command.");
+        }
+        syncCurrentDeviceStateLocked();
         pending->done = true;
         cv_.notify_all();
     });
@@ -1217,6 +1646,7 @@ void RadioEngine::workerLoop()
             auto command = std::move(commandQueue_.front());
             commandQueue_.pop_front();
             command();
+            syncCurrentDeviceStateLocked();
             if (stopWorker_) {
                 break;
             }
@@ -1231,6 +1661,7 @@ void RadioEngine::workerLoop()
             } else {
                 updateFadeVolumeLocked();
             }
+            syncCurrentDeviceStateLocked();
         }
     }
 
@@ -1238,5 +1669,6 @@ void RadioEngine::workerLoop()
     state_ = PlaybackState::Stopped;
     mode_ = PlaybackMode::None;
     trackStartValid_ = false;
+    syncCurrentDeviceStateLocked();
     workerThreadId_ = {};
 }

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <utility>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class RadioEngine
@@ -24,19 +26,25 @@ public:
     bool initialize();
     void shutdown();
 
-    bool changePlaylist(const std::string& channelName);
-    bool play();
-    bool start();
-    bool pause();
-    bool stop();
-    bool forward();
-    bool rewind();
-    bool rescanLibrary();
-    bool isPlaying() const;
+    bool changePlaylist(const std::string& channelName, std::uint64_t deviceId = 0);
+    bool play(std::uint64_t deviceId = 0);
+    bool start(std::uint64_t deviceId = 0);
+    bool pause(std::uint64_t deviceId = 0);
+    bool stop(std::uint64_t deviceId = 0);
+    bool forward(std::uint64_t deviceId = 0);
+    bool rewind(std::uint64_t deviceId = 0);
+    bool rescanLibrary(std::uint64_t deviceId = 0);
+    bool isPlaying(std::uint64_t deviceId = 0) const;
+    bool changeToNextSource(int category, std::uint64_t deviceId = 0);
+    bool setFadeParams(float minDistance, float maxDistance, float panDistance, std::uint64_t deviceId = 0);
+    bool volumeUp(float step, std::uint64_t deviceId = 0);
+    bool volumeDown(float step, std::uint64_t deviceId = 0);
 
-    bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ);
+    bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId = 0);
 
-    std::string currentChannel() const;
+    std::string currentChannel(std::uint64_t deviceId = 0) const;
+    std::string currentSourceName(std::uint64_t deviceId = 0) const;
+    std::string currentTrackBasename(std::uint64_t deviceId = 0) const;
     std::size_t channelCount() const;
 
 private:
@@ -96,6 +104,41 @@ private:
         std::vector<std::filesystem::path> ads;
     };
 
+    struct DeviceFadeOverride
+    {
+        bool enabled{ false };
+        float minDistance{ 0.0F };
+        float maxDistance{ 0.0F };
+        float panDistance{ 0.0F };
+    };
+
+    struct DeviceState
+    {
+        std::string selectedKey;
+        PlaybackMode mode{ PlaybackMode::None };
+        PlaybackState state{ PlaybackState::Stopped };
+        std::filesystem::path currentTrackPath;
+
+        std::size_t songIndex{ 0 };
+        std::size_t transitionIndex{ 0 };
+        std::size_t adIndex{ 0 };
+        std::size_t songsSinceAd{ 0 };
+        bool previousWasSong{ false };
+
+        Position emitterPosition{};
+        Position playerPosition{};
+        int lastVolume{ -1 };
+        int lastLeftVolume{ -1 };
+        int lastRightVolume{ -1 };
+        bool panControlsAvailable{ true };
+        bool panUnavailableLogged{ false };
+        std::chrono::steady_clock::time_point trackStartTime{};
+        bool trackStartValid{ false };
+
+        DeviceFadeOverride fadeOverride{};
+        float volumeGain{ 1.0F };
+    };
+
     bool loadConfig();
     static std::filesystem::path configPath();
     static std::string trim(const std::string& text);
@@ -129,7 +172,12 @@ private:
     bool mciStatusModeLocked(std::wstring& outMode);
     bool mciStatusModeSilentLocked(std::wstring& outMode);
     bool waitForAliasClosedLocked(std::chrono::milliseconds timeout);
-    bool runBoolCommand(const std::function<bool()>& command);
+    bool runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command);
+    DeviceState makeCurrentDeviceStateLocked() const;
+    void applyDeviceStateLocked(const DeviceState& state);
+    void syncCurrentDeviceStateLocked();
+    DeviceState& ensureDeviceStateLocked(std::uint64_t deviceId);
+    void switchToDeviceLocked(std::uint64_t deviceId);
 
     void workerLoop();
 
@@ -144,6 +192,9 @@ private:
 
     Config config_{};
     std::map<std::string, ChannelEntry> channels_;
+    std::vector<std::string> streamOrderKeys_;
+    std::unordered_map<std::uint64_t, DeviceState> deviceStates_;
+    std::uint64_t currentDeviceId_{ 0 };
     std::string selectedKey_;
     PlaybackMode mode_{ PlaybackMode::None };
     PlaybackState state_{ PlaybackState::Stopped };

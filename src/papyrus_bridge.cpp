@@ -12,6 +12,14 @@
 #include <optional>
 #include <variant>
 
+namespace
+{
+std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
+{
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(activatorRef));
+}
+}
+
 PapyrusBridge* PapyrusBridge::g_instance_ = nullptr;
 
 PapyrusBridge::PapyrusBridge(Logger& logger, RadioEngine& engine) :
@@ -149,6 +157,12 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "forward", &PapyrusBridge::nativeForward, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "rewind", &PapyrusBridge::nativeRewind, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "isPlaying", &PapyrusBridge::nativeIsPlaying, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "currentSourceName", &PapyrusBridge::nativeCurrentSourceName, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "currentTrackBasename", &PapyrusBridge::nativeCurrentTrackBasename, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "changeToNextSource", &PapyrusBridge::nativeChangeToNextSource, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "setFadeParams", &PapyrusBridge::nativeSetFadeParams, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "volumeUp", &PapyrusBridge::nativeVolumeUp, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "volumeDown", &PapyrusBridge::nativeVolumeDown, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "set_positions", &PapyrusBridge::nativeSetPositions, std::nullopt, false);
 
     registered_ = true;
@@ -191,9 +205,7 @@ void PapyrusBridge::nativeChangePlaylist(std::monostate, RE::TESObjectREFR* acti
         return;
     }
 
-    (void)activatorRef;
-
-    if (!self->engine_.changePlaylist(channelName)) {
+    if (!self->engine_.changePlaylist(channelName, deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus change_playlist failed for channel: " + channelName);
     }
 }
@@ -209,7 +221,7 @@ void PapyrusBridge::nativePlay(std::monostate, RE::TESObjectREFR* activatorRef)
         return;
     }
 
-    if (!self->engine_.play()) {
+    if (!self->engine_.play(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus play failed.");
     }
 }
@@ -225,7 +237,7 @@ void PapyrusBridge::nativeStart(std::monostate, RE::TESObjectREFR* activatorRef)
         return;
     }
 
-    if (!self->engine_.start()) {
+    if (!self->engine_.start(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus start failed.");
     }
 }
@@ -241,7 +253,7 @@ void PapyrusBridge::nativePause(std::monostate, RE::TESObjectREFR* activatorRef)
         return;
     }
 
-    if (!self->engine_.pause()) {
+    if (!self->engine_.pause(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus pause failed.");
     }
 }
@@ -257,7 +269,7 @@ void PapyrusBridge::nativeStop(std::monostate, RE::TESObjectREFR* activatorRef)
         return;
     }
 
-    if (!self->engine_.stop()) {
+    if (!self->engine_.stop(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus stop failed.");
     }
 }
@@ -273,7 +285,7 @@ void PapyrusBridge::nativeForward(std::monostate, RE::TESObjectREFR* activatorRe
         return;
     }
 
-    if (!self->engine_.forward()) {
+    if (!self->engine_.forward(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus forward failed.");
     }
 }
@@ -289,7 +301,7 @@ void PapyrusBridge::nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef
         return;
     }
 
-    if (!self->engine_.rewind()) {
+    if (!self->engine_.rewind(deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus rewind failed.");
     }
 }
@@ -301,8 +313,88 @@ bool PapyrusBridge::nativeIsPlaying(std::monostate, RE::TESObjectREFR* activator
         return false;
     }
 
-    (void)activatorRef;
-    return self->engine_.isPlaying();
+    return self->engine_.isPlaying(deviceKeyFromRef(activatorRef));
+}
+
+std::string PapyrusBridge::nativeCurrentSourceName(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return {};
+    }
+
+    return self->engine_.currentSourceName(deviceKeyFromRef(activatorRef));
+}
+
+std::string PapyrusBridge::nativeCurrentTrackBasename(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return {};
+    }
+
+    return self->engine_.currentTrackBasename(deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeChangeToNextSource(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t category)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("changeToNextSource", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.changeToNextSource(static_cast<int>(category), deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeSetFadeParams(
+    std::monostate,
+    RE::TESObjectREFR* activatorRef,
+    float minDistance,
+    float maxDistance,
+    float panDistance)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("setFadeParams", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.setFadeParams(minDistance, maxDistance, panDistance, deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeVolumeUp(std::monostate, RE::TESObjectREFR* activatorRef, float step)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("volumeUp", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.volumeUp(step, deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeVolumeDown(std::monostate, RE::TESObjectREFR* activatorRef, float step)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("volumeDown", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.volumeDown(step, deviceKeyFromRef(activatorRef));
 }
 
 void PapyrusBridge::nativeSetPositions(
@@ -320,9 +412,14 @@ void PapyrusBridge::nativeSetPositions(
         return;
     }
 
-    (void)activatorRef;
-
-    if (!self->engine_.setPositions(activatorX, activatorY, activatorZ, playerX, playerY, playerZ)) {
+    if (!self->engine_.setPositions(
+            activatorX,
+            activatorY,
+            activatorZ,
+            playerX,
+            playerY,
+            playerZ,
+            deviceKeyFromRef(activatorRef))) {
         self->logger_.warn("Papyrus set_positions failed.");
     }
 }

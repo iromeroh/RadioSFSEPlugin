@@ -6,6 +6,7 @@
 #include "sfse_common/sfse_version.h"
 
 #include <memory>
+#include <exception>
 #include <string>
 
 #include <windows.h>
@@ -15,6 +16,8 @@ namespace
 Logger g_logger;
 std::unique_ptr<RadioEngine> g_engine;
 std::unique_ptr<PapyrusBridge> g_papyrusBridge;
+thread_local std::string g_sourceNameBuffer;
+thread_local std::string g_trackNameBuffer;
 }
 
 extern "C"
@@ -45,24 +48,32 @@ static bool registerPapyrusBridge(const SFSEInterface* sfse)
 
 extern "C" __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
 {
-    (void)sfse;
+    try {
+        (void)sfse;
 
-    if (!g_logger.initialize()) {
+        if (!g_logger.initialize()) {
+            return false;
+        }
+
+        g_logger.info("[M0] SFSEPlugin_Load entered.");
+
+        g_engine = std::make_unique<RadioEngine>(g_logger);
+        if (!g_engine->initialize()) {
+            g_logger.error("Radio engine failed to initialize.");
+            return false;
+        }
+
+        (void)registerPapyrusBridge(sfse);
+
+        g_logger.info("RadioSFSE loaded.");
+        return true;
+    } catch (const std::exception& ex) {
+        g_logger.error(std::string("Unhandled exception in SFSEPlugin_Load: ") + ex.what());
+        return false;
+    } catch (...) {
+        g_logger.error("Unhandled unknown exception in SFSEPlugin_Load.");
         return false;
     }
-
-    g_logger.info("[M0] SFSEPlugin_Load entered.");
-
-    g_engine = std::make_unique<RadioEngine>(g_logger);
-    if (!g_engine->initialize()) {
-        g_logger.error("Radio engine failed to initialize.");
-        return false;
-    }
-
-    (void)registerPapyrusBridge(sfse);
-
-    g_logger.info("RadioSFSE loaded.");
-    return true;
 }
 
 extern "C" __declspec(dllexport) bool change_playlist(const char* channelName)
@@ -125,6 +136,46 @@ extern "C" __declspec(dllexport) bool set_positions(
 extern "C" __declspec(dllexport) bool is_playing()
 {
     return g_engine ? g_engine->isPlaying() : false;
+}
+
+extern "C" __declspec(dllexport) bool change_to_next_source(int category)
+{
+    return g_engine ? g_engine->changeToNextSource(category) : false;
+}
+
+extern "C" __declspec(dllexport) bool set_fade_params(float minDistance, float maxDistance, float panDistance)
+{
+    return g_engine ? g_engine->setFadeParams(minDistance, maxDistance, panDistance) : false;
+}
+
+extern "C" __declspec(dllexport) bool volume_up(float step)
+{
+    return g_engine ? g_engine->volumeUp(step) : false;
+}
+
+extern "C" __declspec(dllexport) bool volume_down(float step)
+{
+    return g_engine ? g_engine->volumeDown(step) : false;
+}
+
+extern "C" __declspec(dllexport) const char* current_source_name()
+{
+    if (!g_engine) {
+        return "";
+    }
+
+    g_sourceNameBuffer = g_engine->currentSourceName();
+    return g_sourceNameBuffer.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* current_track_basename()
+{
+    if (!g_engine) {
+        return "";
+    }
+
+    g_trackNameBuffer = g_engine->currentTrackBasename();
+    return g_trackNameBuffer.c_str();
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
