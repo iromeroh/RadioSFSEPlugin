@@ -36,6 +36,7 @@ public:
     bool rescanLibrary(std::uint64_t deviceId = 0);
     bool isPlaying(std::uint64_t deviceId = 0) const;
     bool changeToNextSource(int category, std::uint64_t deviceId = 0);
+    bool selectNextSource(int category, std::uint64_t deviceId = 0);
     bool setFadeParams(float minDistance, float maxDistance, float panDistance, std::uint64_t deviceId = 0);
     bool volumeUp(float step, std::uint64_t deviceId = 0);
     bool volumeDown(float step, std::uint64_t deviceId = 0);

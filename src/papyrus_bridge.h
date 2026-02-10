@@ -47,6 +47,7 @@ private:
     static std::string nativeCurrentSourceName(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::string nativeCurrentTrackBasename(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeChangeToNextSource(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t category);
+    static bool nativeSelectNextSource(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t category);
     static bool nativeSetFadeParams(
         std::monostate,
         RE::TESObjectREFR* activatorRef,

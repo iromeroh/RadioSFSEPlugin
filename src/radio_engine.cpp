@@ -350,10 +350,6 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
                     addCandidate(key, entry.displayName);
                 }
             }
-
-            std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
-                return toLower(a.displayName) < toLower(b.displayName);
-            });
         } else if (category == 3) {
             for (const auto& key : streamOrderKeys_) {
                 const auto it = channels_.find(key);
@@ -371,6 +367,98 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
             logger_.warn("changeToNextSource failed. No sources for category: " + std::to_string(category));
             return false;
         }
+
+        std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
+            return toLower(a.displayName) < toLower(b.displayName);
+        });
+
+        const auto channelIt = channels_.find(candidates.front().key);
+        if (channelIt == channels_.end()) {
+            return false;
+        }
+
+        selectedKey_ = channelIt->first;
+        mode_ = PlaybackMode::None;
+        state_ = PlaybackState::Stopped;
+        songIndex_ = 0;
+        transitionIndex_ = 0;
+        adIndex_ = 0;
+        songsSinceAd_ = 0;
+        previousWasSong_ = false;
+        currentTrackPath_.clear();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
+        panControlsAvailable_ = true;
+        panUnavailableLogged_ = false;
+        trackStartValid_ = false;
+
+        stopPlaybackDeviceLocked(true);
+
+        std::string sourceType = "playlist";
+        if (channelIt->second.isStream) {
+            sourceType = "stream";
+        } else if (channelIt->second.type == ChannelType::Station) {
+            sourceType = "station";
+        }
+
+        logger_.info("changeToNextSource selected: " + channelIt->second.displayName +
+                     " (" + sourceType + ", category=" + std::to_string(category) +
+                     "). Playback stopped; waiting for explicit play/start.");
+        return true;
+    });
+}
+
+bool RadioEngine::selectNextSource(int category, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, category]() {
+        if (config_.autoRescanOnChangePlaylist) {
+            scanLibraryLocked();
+        }
+
+        struct Candidate
+        {
+            std::string key;
+            std::string displayName;
+        };
+
+        std::vector<Candidate> candidates;
+        auto addCandidate = [&candidates](const std::string& key, const std::string& displayName) {
+            candidates.push_back(Candidate{ key, displayName });
+        };
+
+        if (category == 1 || category == 2) {
+            for (const auto& [key, entry] : channels_) {
+                if (entry.isStream) {
+                    continue;
+                }
+                if (category == 1 && entry.type == ChannelType::Playlist) {
+                    addCandidate(key, entry.displayName);
+                } else if (category == 2 && entry.type == ChannelType::Station) {
+                    addCandidate(key, entry.displayName);
+                }
+            }
+        } else if (category == 3) {
+            for (const auto& key : streamOrderKeys_) {
+                const auto it = channels_.find(key);
+                if (it == channels_.end() || !it->second.isStream) {
+                    continue;
+                }
+                addCandidate(it->first, it->second.displayName);
+            }
+        } else {
+            logger_.warn("selectNextSource failed. Invalid category: " + std::to_string(category));
+            return false;
+        }
+
+        if (candidates.empty()) {
+            logger_.warn("selectNextSource failed. No sources for category: " + std::to_string(category));
+            return false;
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
+            return toLower(a.displayName) < toLower(b.displayName);
+        });
 
         std::size_t nextIndex = 0;
         for (std::size_t i = 0; i < candidates.size(); ++i) {
@@ -410,12 +498,10 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
             sourceType = "station";
         }
 
-        logger_.info("changeToNextSource selected: " + channelIt->second.displayName +
-                     " (" + sourceType + ", category=" + std::to_string(category) + ")");
-
-        const PlaybackMode desiredMode =
-            channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
-        return startCurrentLocked(desiredMode, true);
+        logger_.info("selectNextSource selected: " + channelIt->second.displayName +
+                     " (" + sourceType + ", category=" + std::to_string(category) +
+                     "). Playback stopped; waiting for explicit play/start.");
+        return true;
     });
 }
 

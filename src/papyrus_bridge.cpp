@@ -160,6 +160,7 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "currentSourceName", &PapyrusBridge::nativeCurrentSourceName, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "currentTrackBasename", &PapyrusBridge::nativeCurrentTrackBasename, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "changeToNextSource", &PapyrusBridge::nativeChangeToNextSource, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "selectNextSource", &PapyrusBridge::nativeSelectNextSource, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setFadeParams", &PapyrusBridge::nativeSetFadeParams, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeUp", &PapyrusBridge::nativeVolumeUp, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeDown", &PapyrusBridge::nativeVolumeDown, std::nullopt, false);
@@ -352,6 +353,20 @@ bool PapyrusBridge::nativeChangeToNextSource(std::monostate, RE::TESObjectREFR* 
     }
 
     return self->engine_.changeToNextSource(static_cast<int>(category), deviceKeyFromRef(activatorRef));
+}
+
+bool PapyrusBridge::nativeSelectNextSource(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t category)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("selectNextSource", activatorRef)) {
+        return false;
+    }
+
+    return self->engine_.selectNextSource(static_cast<int>(category), deviceKeyFromRef(activatorRef));
 }
 
 bool PapyrusBridge::nativeSetFadeParams(

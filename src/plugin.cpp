@@ -143,6 +143,11 @@ extern "C" __declspec(dllexport) bool change_to_next_source(int category)
     return g_engine ? g_engine->changeToNextSource(category) : false;
 }
 
+extern "C" __declspec(dllexport) bool select_next_source(int category)
+{
+    return g_engine ? g_engine->selectNextSource(category) : false;
+}
+
 extern "C" __declspec(dllexport) bool set_fade_params(float minDistance, float maxDistance, float panDistance)
 {
     return g_engine ? g_engine->setFadeParams(minDistance, maxDistance, panDistance) : false;
