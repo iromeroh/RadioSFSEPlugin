@@ -24,6 +24,13 @@ loop_playlist=true
 
 # Optional internet stream stations (Name|Url). Repeat as needed.
 # They behave like station channels but without simulated ads/transitions.
-# Use direct stream URLs (for example .mp3 or .ogg endpoints).
+# Supported URL types:
+#   - direct stream URLs (.mp3/.ogg/.aac...)
+#   - .pls
+#   - .m3u / .m3u8
+#   - RSS/Atom feed URLs with enclosure links
+#   - .xspf
 # stream_station=Space Wave|https://example.com/stream.mp3
 # stream_station=Nebula OGG|https://example.com/radio.ogg
+# Real-world Shoutcast .pls example:
+stream_station=Shoutcast_99497996|http://yp.shoutcast.com/sbin/tunein-station.pls?id=99497996

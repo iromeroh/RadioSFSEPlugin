@@ -73,6 +73,13 @@ private:
         Paused
     };
 
+    enum class PlaybackBackend
+    {
+        None,
+        MCI,
+        MediaFoundationStream
+    };
+
     struct Position
     {
         float x{ 0.0F };
@@ -160,6 +167,9 @@ private:
     bool startCurrentLocked(PlaybackMode mode, bool resetPosition);
     bool playPathLocked(const std::filesystem::path& filePath);
     bool playStreamLocked(const std::string& streamUrl);
+    bool ensureMediaFoundationLocked();
+    bool startMediaFoundationStreamLocked(const std::string& streamUrl);
+    void shutdownMediaFoundationLocked();
     void stopPlaybackDeviceLocked(bool closeDevice);
     bool resumeLocked();
     bool pauseLocked();
@@ -177,6 +187,7 @@ private:
     bool mciStatusModeLocked(std::wstring& outMode);
     bool mciStatusModeSilentLocked(std::wstring& outMode);
     bool waitForAliasClosedLocked(std::chrono::milliseconds timeout);
+    void cleanupCurrentStreamTempFileLocked();
     bool runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command);
     DeviceState makeCurrentDeviceStateLocked() const;
     void applyDeviceStateLocked(const DeviceState& state);
@@ -194,12 +205,15 @@ private:
     bool stopWorker_{ false };
     std::thread::id workerThreadId_{};
     std::deque<std::function<void()>> commandQueue_{};
+    struct MfState;
+    std::unique_ptr<MfState> mfState_{};
 
     Config config_{};
     std::map<std::string, ChannelEntry> channels_;
     std::vector<std::string> streamOrderKeys_;
     std::unordered_map<std::uint64_t, DeviceState> deviceStates_;
     std::uint64_t currentDeviceId_{ 0 };
+    PlaybackBackend backend_{ PlaybackBackend::None };
     std::string selectedKey_;
     PlaybackMode mode_{ PlaybackMode::None };
     PlaybackState state_{ PlaybackState::Stopped };
@@ -220,4 +234,5 @@ private:
     bool panUnavailableLogged_{ false };
     std::chrono::steady_clock::time_point trackStartTime_{};
     bool trackStartValid_{ false };
+    std::filesystem::path streamWrapperTempPath_;
 };

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <variant>
 
 namespace RE
@@ -35,6 +36,9 @@ private:
     bool installMessagingListener(const SFSEInterface* sfse);
     bool tryRegisterNatives(const char* reason);
     bool shouldAcceptCommand(const char* commandName, const void* activatorRef);
+    void setLastError(std::uint64_t deviceId, const std::string& message);
+    void clearLastError(std::uint64_t deviceId);
+    std::string getLastError(std::uint64_t deviceId) const;
 
     static void nativeChangePlaylist(std::monostate, RE::TESObjectREFR* activatorRef, std::string channelName);
     static void nativePlay(std::monostate, RE::TESObjectREFR* activatorRef);
@@ -60,6 +64,7 @@ private:
     static bool nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume);
     static std::string nativeGetTrack(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorRef, std::string trackBasename);
+    static std::string nativeLastError(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeSetPositions(
         std::monostate,
         RE::TESObjectREFR* activatorRef,
@@ -81,4 +86,6 @@ private:
     std::uintptr_t lastCommandRef_{ 0 };
     std::chrono::steady_clock::time_point lastCommandTime_{};
     std::chrono::milliseconds commandDebounce_{ 200 };
+    mutable std::mutex lastErrorMutex_{};
+    std::unordered_map<std::uint64_t, std::string> lastErrorByDevice_{};
 };

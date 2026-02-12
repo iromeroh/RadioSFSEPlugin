@@ -53,9 +53,14 @@ target_link_libraries(RadioSFSEPlugin PRIVATE
     d3dcompiler
     dbghelp
     dxgi
+    mf
+    mfplat
+    mfplay
+    mfuuid
     ole32
     shell32
     version
+    wininet
     winmm
     ws2_32
 )

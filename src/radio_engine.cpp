@@ -2,16 +2,24 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <regex>
 
 #include <windows.h>
+#include <mfapi.h>
+#include <mferror.h>
+#include <mfplay.h>
 #include <mmsystem.h>
+#include <wininet.h>
+#include <wrl/client.h>
 
 namespace
 {
@@ -19,6 +27,725 @@ constexpr wchar_t kAlias[] = L"RadioSFSE";
 constexpr float kMinimumFadeGap = 1.0F;
 constexpr float kDefaultVolumePercent = 100.0F;
 constexpr float kMaximumVolumePercent = 200.0F;
+constexpr float kDefaultVolumeStepPercent = 5.0F;
+constexpr std::size_t kMaxResolverBytes = 512 * 1024;
+constexpr std::size_t kMaxWrapperTempBytes = 128 * 1024;
+constexpr int kMaxResolveDepth = 4;
+constexpr DWORD kResolverTimeoutMs = 3500;
+constexpr auto kCommandWaitTimeout = std::chrono::milliseconds(5000);
+constexpr auto kStreamStartWaitTimeout = std::chrono::milliseconds(10000);
+constexpr auto kStreamStartPoll = std::chrono::milliseconds(50);
+
+std::string toLowerCopy(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+std::string trimAsciiCopy(const std::string& value)
+{
+    std::size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])) != 0) {
+        ++start;
+    }
+
+    std::size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+
+    return value.substr(start, end - start);
+}
+
+std::string replaceAll(std::string value, const std::string& needle, const std::string& replacement)
+{
+    if (needle.empty()) {
+        return value;
+    }
+
+    std::size_t pos = 0;
+    while ((pos = value.find(needle, pos)) != std::string::npos) {
+        value.replace(pos, needle.size(), replacement);
+        pos += replacement.size();
+    }
+    return value;
+}
+
+std::string xmlDecodeEntities(std::string value)
+{
+    value = replaceAll(std::move(value), "&amp;", "&");
+    value = replaceAll(std::move(value), "&lt;", "<");
+    value = replaceAll(std::move(value), "&gt;", ">");
+    value = replaceAll(std::move(value), "&quot;", "\"");
+    value = replaceAll(std::move(value), "&apos;", "'");
+    return value;
+}
+
+bool isHttpUrl(const std::string& url)
+{
+    const std::string lower = toLowerCopy(url);
+    return lower.starts_with("http://") || lower.starts_with("https://");
+}
+
+std::string urlExtensionLower(const std::string& url)
+{
+    const std::string trimmed = trimAsciiCopy(url);
+    const std::size_t endPos = trimmed.find_first_of("?#");
+    const std::string path = trimmed.substr(0, endPos);
+    const std::size_t slashPos = path.find_last_of('/');
+    const std::size_t dotPos = path.find_last_of('.');
+    if (dotPos == std::string::npos || (slashPos != std::string::npos && dotPos < slashPos)) {
+        return {};
+    }
+
+    return toLowerCopy(path.substr(dotPos));
+}
+
+bool hasDirectAudioExtension(const std::string& ext)
+{
+    return ext == ".mp3" || ext == ".aac" || ext == ".m4a" || ext == ".ogg" ||
+           ext == ".opus" || ext == ".wav" || ext == ".flac" || ext == ".wma";
+}
+
+bool isLikelyWrapperExtension(const std::string& ext)
+{
+    return ext == ".pls" || ext == ".m3u" || ext == ".m3u8" ||
+           ext == ".xspf" || ext == ".rss" || ext == ".atom" || ext == ".xml";
+}
+
+bool isLikelyRiskyDirectAudioUrlForMci(const std::string& url)
+{
+    if (!isHttpUrl(url)) {
+        return false;
+    }
+
+    const std::string ext = urlExtensionLower(url);
+    if (!hasDirectAudioExtension(ext)) {
+        return false;
+    }
+
+    URL_COMPONENTSA components{};
+    components.dwStructSize = sizeof(components);
+    components.dwSchemeLength = static_cast<DWORD>(-1);
+    components.dwHostNameLength = static_cast<DWORD>(-1);
+    components.dwUrlPathLength = static_cast<DWORD>(-1);
+    components.dwExtraInfoLength = static_cast<DWORD>(-1);
+    if (!InternetCrackUrlA(url.c_str(), 0, 0, &components)) {
+        return false;
+    }
+
+    const bool isHttps = components.nScheme == INTERNET_SCHEME_HTTPS;
+    const INTERNET_PORT defaultPort = isHttps ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    return components.nPort != 0 && components.nPort != defaultPort;
+}
+
+std::string formatHresult(const HRESULT hr)
+{
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "0x%08X", static_cast<unsigned int>(hr));
+    return std::string(buffer);
+}
+
+std::string mfStateName(const MFP_MEDIAPLAYER_STATE state)
+{
+    switch (state) {
+    case MFP_MEDIAPLAYER_STATE_EMPTY:
+        return "EMPTY";
+    case MFP_MEDIAPLAYER_STATE_STOPPED:
+        return "STOPPED";
+    case MFP_MEDIAPLAYER_STATE_PLAYING:
+        return "PLAYING";
+    case MFP_MEDIAPLAYER_STATE_PAUSED:
+        return "PAUSED";
+    case MFP_MEDIAPLAYER_STATE_SHUTDOWN:
+        return "SHUTDOWN";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+std::string httpsToHttpVariant(const std::string& url)
+{
+    if (!url.starts_with("https://")) {
+        return {};
+    }
+    return std::string("http://") + url.substr(std::string("https://").size());
+}
+
+std::string httpToHttpsVariant(const std::string& url)
+{
+    if (!url.starts_with("http://")) {
+        return {};
+    }
+    return std::string("https://") + url.substr(std::string("http://").size());
+}
+
+std::string buildUrlFromParts(const URL_COMPONENTSA& parts, const std::string& path)
+{
+    if (parts.lpszHostName == nullptr || parts.dwHostNameLength == 0) {
+        return {};
+    }
+
+    const bool isHttps = parts.nScheme == INTERNET_SCHEME_HTTPS;
+    const std::string scheme = isHttps ? "https://" : "http://";
+    const std::string host(parts.lpszHostName, parts.dwHostNameLength);
+    if (host.empty()) {
+        return {};
+    }
+
+    std::string url = scheme + host;
+    const INTERNET_PORT defaultPort = isHttps ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    if (parts.nPort != 0 && parts.nPort != defaultPort) {
+        url += ":" + std::to_string(parts.nPort);
+    }
+    if (path.empty()) {
+        url += "/";
+    } else if (path[0] != '/') {
+        url += "/";
+        url += path;
+    } else {
+        url += path;
+    }
+    return url;
+}
+
+std::vector<std::string> makeShoutcastStyleVariants(const std::string& url)
+{
+    std::vector<std::string> out;
+    if (!isHttpUrl(url)) {
+        return out;
+    }
+
+    URL_COMPONENTSA parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = static_cast<DWORD>(-1);
+    parts.dwHostNameLength = static_cast<DWORD>(-1);
+    parts.dwUrlPathLength = static_cast<DWORD>(-1);
+    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+    if (!InternetCrackUrlA(url.c_str(), 0, 0, &parts)) {
+        return out;
+    }
+
+    const std::string path =
+        (parts.lpszUrlPath != nullptr && parts.dwUrlPathLength > 0)
+            ? std::string(parts.lpszUrlPath, parts.dwUrlPathLength)
+            : std::string("/");
+    const bool isRootLike = (path == "/" || path == "/;");
+    if (isRootLike) {
+        return out;
+    }
+
+    out.push_back(buildUrlFromParts(parts, "/;"));
+    out.push_back(buildUrlFromParts(parts, "/"));
+    return out;
+}
+
+struct MfEventState
+{
+    std::atomic<HRESULT> lastError{ S_OK };
+    std::atomic<bool> playbackEnded{ false };
+};
+
+class MfPlayerCallback final : public IMFPMediaPlayerCallback
+{
+public:
+    explicit MfPlayerCallback(std::shared_ptr<MfEventState> state) :
+        state_(std::move(state))
+    {
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** object) override
+    {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IMFPMediaPlayerCallback)) {
+            *object = static_cast<IMFPMediaPlayerCallback*>(this);
+            AddRef();
+            return S_OK;
+        }
+
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override
+    {
+        return static_cast<ULONG>(++refs_);
+    }
+
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        const long remaining = --refs_;
+        if (remaining == 0) {
+            delete this;
+        }
+        return static_cast<ULONG>(remaining);
+    }
+
+    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* eventHeader) override
+    {
+        if (state_ == nullptr || eventHeader == nullptr) {
+            return;
+        }
+
+        if (FAILED(eventHeader->hrEvent)) {
+            state_->lastError.store(eventHeader->hrEvent);
+        }
+        if (eventHeader->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED) {
+            state_->playbackEnded.store(true);
+        }
+    }
+
+private:
+    std::atomic<long> refs_{ 1 };
+    std::shared_ptr<MfEventState> state_;
+};
+
+bool isLikelyBinaryContent(const std::string& text)
+{
+    if (text.empty()) {
+        return false;
+    }
+
+    std::size_t controlBytes = 0;
+    for (unsigned char c : text) {
+        if (c == 0) {
+            return true;
+        }
+        if (c < 32 && c != '\n' && c != '\r' && c != '\t') {
+            ++controlBytes;
+        }
+    }
+
+    return (controlBytes * 100) / text.size() > 3;
+}
+
+std::string combineRelativeUrl(const std::string& baseUrl, const std::string& entry)
+{
+    if (entry.empty()) {
+        return {};
+    }
+
+    if (isHttpUrl(entry)) {
+        return entry;
+    }
+
+    if (entry.starts_with("//")) {
+        const std::string baseLower = toLowerCopy(baseUrl);
+        if (baseLower.starts_with("https://")) {
+            return "https:" + entry;
+        }
+        return "http:" + entry;
+    }
+
+    if (!isHttpUrl(baseUrl)) {
+        return entry;
+    }
+
+    DWORD needed = 0;
+    (void)InternetCombineUrlA(baseUrl.c_str(), entry.c_str(), nullptr, &needed, ICU_BROWSER_MODE);
+    if (needed == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        return entry;
+    }
+
+    std::string combined(static_cast<std::size_t>(needed), '\0');
+    if (!InternetCombineUrlA(baseUrl.c_str(), entry.c_str(), combined.data(), &needed, ICU_BROWSER_MODE)) {
+        return entry;
+    }
+
+    if (needed > 0 && combined[needed - 1] == '\0') {
+        --needed;
+    }
+    combined.resize(static_cast<std::size_t>(needed));
+    return combined;
+}
+
+struct TextUrlResponse
+{
+    bool ok{ false };
+    std::string body;
+    std::string contentType;
+    std::string finalUrl;
+};
+
+TextUrlResponse fetchUrlText(const std::string& url)
+{
+    TextUrlResponse response{};
+    if (!isHttpUrl(url)) {
+        return response;
+    }
+
+    HINTERNET internet = InternetOpenA("RadioSFSE/1.0", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (internet == nullptr) {
+        return response;
+    }
+
+    DWORD timeoutMs = kResolverTimeoutMs;
+    (void)InternetSetOptionA(internet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+    (void)InternetSetOptionA(internet, INTERNET_OPTION_SEND_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+    (void)InternetSetOptionA(internet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+
+    const DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_COOKIES;
+    HINTERNET request = InternetOpenUrlA(internet, url.c_str(), nullptr, 0, flags, 0);
+    if (request == nullptr) {
+        InternetCloseHandle(internet);
+        return response;
+    }
+
+    (void)InternetSetOptionA(request, INTERNET_OPTION_CONNECT_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+    (void)InternetSetOptionA(request, INTERNET_OPTION_SEND_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+    (void)InternetSetOptionA(request, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+
+    DWORD headerSize = 0;
+    (void)HttpQueryInfoA(request, HTTP_QUERY_CONTENT_TYPE, nullptr, &headerSize, nullptr);
+    if (headerSize > 0 && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        std::string contentType(static_cast<std::size_t>(headerSize), '\0');
+        if (HttpQueryInfoA(request, HTTP_QUERY_CONTENT_TYPE, contentType.data(), &headerSize, nullptr)) {
+            if (headerSize > 0 && contentType[headerSize - 1] == '\0') {
+                --headerSize;
+            }
+            contentType.resize(static_cast<std::size_t>(headerSize));
+            response.contentType = trimAsciiCopy(contentType);
+        }
+    }
+
+    DWORD urlSize = 0;
+    (void)InternetQueryOptionA(request, INTERNET_OPTION_URL, nullptr, &urlSize);
+    if (urlSize > 0 && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        std::string finalUrl(static_cast<std::size_t>(urlSize), '\0');
+        if (InternetQueryOptionA(request, INTERNET_OPTION_URL, finalUrl.data(), &urlSize)) {
+            if (urlSize > 0 && finalUrl[urlSize - 1] == '\0') {
+                --urlSize;
+            }
+            finalUrl.resize(static_cast<std::size_t>(urlSize));
+            response.finalUrl = trimAsciiCopy(finalUrl);
+        }
+    }
+
+    std::array<char, 4096> buffer{};
+    DWORD read = 0;
+    while (InternetReadFile(request, buffer.data(), static_cast<DWORD>(buffer.size()), &read) && read > 0) {
+        const std::size_t remaining =
+            response.body.size() < kMaxResolverBytes ? (kMaxResolverBytes - response.body.size()) : 0;
+        if (remaining == 0) {
+            break;
+        }
+
+        const std::size_t appendSize = std::min<std::size_t>(remaining, static_cast<std::size_t>(read));
+        response.body.append(buffer.data(), appendSize);
+        if (appendSize < static_cast<std::size_t>(read)) {
+            break;
+        }
+    }
+
+    InternetCloseHandle(request);
+    InternetCloseHandle(internet);
+
+    response.ok = !response.body.empty();
+    return response;
+}
+
+std::string parseM3UFirstUrl(const std::string& body, const std::string& baseUrl)
+{
+    std::size_t cursor = 0;
+    while (cursor <= body.size()) {
+        const std::size_t lineEnd = body.find_first_of("\r\n", cursor);
+        const std::size_t lineLen = (lineEnd == std::string::npos) ? (body.size() - cursor) : (lineEnd - cursor);
+        std::string line = trimAsciiCopy(body.substr(cursor, lineLen));
+        cursor = (lineEnd == std::string::npos) ? (body.size() + 1) : (lineEnd + 1);
+
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        line = xmlDecodeEntities(line);
+        const std::string resolved = combineRelativeUrl(baseUrl, line);
+        if (!resolved.empty()) {
+            return resolved;
+        }
+    }
+
+    return {};
+}
+
+std::string parsePLSFirstUrl(const std::string& body, const std::string& baseUrl)
+{
+    std::map<int, std::string> entries;
+    int fallbackIndex = 1000;
+
+    std::size_t cursor = 0;
+    while (cursor <= body.size()) {
+        const std::size_t lineEnd = body.find_first_of("\r\n", cursor);
+        const std::size_t lineLen = (lineEnd == std::string::npos) ? (body.size() - cursor) : (lineEnd - cursor);
+        const std::string line = trimAsciiCopy(body.substr(cursor, lineLen));
+        cursor = (lineEnd == std::string::npos) ? (body.size() + 1) : (lineEnd + 1);
+
+        if (line.empty() || line[0] == ';' || line[0] == '#') {
+            continue;
+        }
+
+        const std::size_t eqPos = line.find('=');
+        if (eqPos == std::string::npos) {
+            continue;
+        }
+
+        const std::string key = toLowerCopy(trimAsciiCopy(line.substr(0, eqPos)));
+        std::string value = trimAsciiCopy(line.substr(eqPos + 1));
+        if (!key.starts_with("file") || value.empty()) {
+            continue;
+        }
+
+        int index = fallbackIndex++;
+        const std::string idxText = trimAsciiCopy(key.substr(4));
+        if (!idxText.empty()) {
+            try {
+                index = std::stoi(idxText);
+            } catch (...) {
+                index = fallbackIndex++;
+            }
+        }
+
+        value = xmlDecodeEntities(value);
+        entries[index] = combineRelativeUrl(baseUrl, value);
+    }
+
+    for (const auto& [index, entry] : entries) {
+        (void)index;
+        if (!entry.empty()) {
+            return entry;
+        }
+    }
+
+    return {};
+}
+
+std::string parseRSSAtomFirstUrl(const std::string& body, const std::string& baseUrl)
+{
+    static const std::regex enclosurePattern(
+        R"(<\s*enclosure\b[^>]*\burl\s*=\s*["']([^"']+)["'])",
+        std::regex::icase);
+    static const std::regex linkRelHrefPattern(
+        R"(<\s*link\b[^>]*\brel\s*=\s*["']enclosure["'][^>]*\bhref\s*=\s*["']([^"']+)["'])",
+        std::regex::icase);
+    static const std::regex linkHrefRelPattern(
+        R"(<\s*link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*\brel\s*=\s*["']enclosure["'])",
+        std::regex::icase);
+
+    std::smatch match;
+    if (std::regex_search(body, match, enclosurePattern) && match.size() > 1) {
+        return combineRelativeUrl(baseUrl, xmlDecodeEntities(match[1].str()));
+    }
+    if (std::regex_search(body, match, linkRelHrefPattern) && match.size() > 1) {
+        return combineRelativeUrl(baseUrl, xmlDecodeEntities(match[1].str()));
+    }
+    if (std::regex_search(body, match, linkHrefRelPattern) && match.size() > 1) {
+        return combineRelativeUrl(baseUrl, xmlDecodeEntities(match[1].str()));
+    }
+
+    return {};
+}
+
+std::string parseXSPFFirstUrl(const std::string& body, const std::string& baseUrl)
+{
+    static const std::regex locationPattern(
+        R"(<\s*location\s*>\s*([^<]+?)\s*<\s*/\s*location\s*>)",
+        std::regex::icase);
+
+    std::smatch match;
+    if (!std::regex_search(body, match, locationPattern) || match.size() <= 1) {
+        return {};
+    }
+
+    return combineRelativeUrl(baseUrl, xmlDecodeEntities(match[1].str()));
+}
+
+std::string resolvePlayableStreamUrl(const std::string& inputUrl, Logger& logger, int depth = 0)
+{
+    if (depth > kMaxResolveDepth) {
+        logger.warn("Stream resolver reached max recursion depth for URL: " + inputUrl);
+        return inputUrl;
+    }
+
+    const std::string trimmed = trimAsciiCopy(inputUrl);
+    if (trimmed.empty() || !isHttpUrl(trimmed)) {
+        return trimmed;
+    }
+
+    const std::string ext = urlExtensionLower(trimmed);
+    if (hasDirectAudioExtension(ext)) {
+        return trimmed;
+    }
+
+    const TextUrlResponse fetched = fetchUrlText(trimmed);
+    if (!fetched.ok) {
+        return trimmed;
+    }
+    if (isLikelyBinaryContent(fetched.body)) {
+        return trimmed;
+    }
+
+    const std::string finalUrl = fetched.finalUrl.empty() ? trimmed : fetched.finalUrl;
+    const std::string lowerContentType = toLowerCopy(fetched.contentType);
+    const std::string lowerBody = toLowerCopy(fetched.body);
+
+    const bool looksLikePLS =
+        ext == ".pls" || lowerContentType.find("audio/x-scpls") != std::string::npos ||
+        lowerBody.find("[playlist]") != std::string::npos;
+    const bool looksLikeM3U =
+        ext == ".m3u" || ext == ".m3u8" ||
+        lowerContentType.find("mpegurl") != std::string::npos ||
+        lowerBody.find("#extm3u") != std::string::npos;
+    const bool looksLikeXSPF =
+        ext == ".xspf" || lowerContentType.find("xspf") != std::string::npos ||
+        lowerBody.find("<playlist") != std::string::npos && lowerBody.find("xspf.org/ns/0/") != std::string::npos;
+    const bool looksLikeRSSAtom =
+        ext == ".rss" || ext == ".atom" || ext == ".xml" ||
+        lowerContentType.find("rss") != std::string::npos ||
+        lowerContentType.find("atom") != std::string::npos ||
+        lowerBody.find("<rss") != std::string::npos ||
+        lowerBody.find("<feed") != std::string::npos;
+
+    std::string resolved;
+    if (looksLikePLS) {
+        resolved = parsePLSFirstUrl(fetched.body, finalUrl);
+    } else if (looksLikeM3U) {
+        resolved = parseM3UFirstUrl(fetched.body, finalUrl);
+    } else if (looksLikeXSPF) {
+        resolved = parseXSPFFirstUrl(fetched.body, finalUrl);
+    } else if (looksLikeRSSAtom) {
+        resolved = parseRSSAtomFirstUrl(fetched.body, finalUrl);
+    }
+
+    if (resolved.empty()) {
+        return trimmed;
+    }
+
+    if (toLowerCopy(resolved) == toLowerCopy(trimmed)) {
+        return resolved;
+    }
+
+    logger.info("Resolved stream URL: " + trimmed + " -> " + resolved);
+    const std::string resolvedExt = urlExtensionLower(resolved);
+    if (isLikelyWrapperExtension(resolvedExt)) {
+        return resolvePlayableStreamUrl(resolved, logger, depth + 1);
+    }
+
+    return resolved;
+}
+
+bool looksLikeWrapperResponse(const TextUrlResponse& fetched, const std::string& requestUrl)
+{
+    if (!fetched.ok || fetched.body.empty()) {
+        return false;
+    }
+
+    const std::string ext = urlExtensionLower(requestUrl);
+    const std::string lowerContentType = toLowerCopy(fetched.contentType);
+    const std::string lowerBody = toLowerCopy(fetched.body);
+
+    const bool looksLikePLS =
+        ext == ".pls" || lowerContentType.find("audio/x-scpls") != std::string::npos ||
+        lowerBody.find("[playlist]") != std::string::npos;
+    const bool looksLikeM3U =
+        ext == ".m3u" || ext == ".m3u8" ||
+        lowerContentType.find("mpegurl") != std::string::npos ||
+        lowerBody.find("#extm3u") != std::string::npos;
+    const bool looksLikeXSPF =
+        ext == ".xspf" || lowerContentType.find("xspf") != std::string::npos ||
+        (lowerBody.find("<playlist") != std::string::npos && lowerBody.find("xspf.org/ns/0/") != std::string::npos);
+    const bool looksLikeRSSAtom =
+        ext == ".rss" || ext == ".atom" || ext == ".xml" ||
+        lowerContentType.find("rss") != std::string::npos ||
+        lowerContentType.find("atom") != std::string::npos ||
+        lowerBody.find("<rss") != std::string::npos ||
+        lowerBody.find("<feed") != std::string::npos;
+
+    return looksLikePLS || looksLikeM3U || looksLikeXSPF || looksLikeRSSAtom;
+}
+
+std::string wrapperExtensionForResponse(const TextUrlResponse& fetched, const std::string& requestUrl)
+{
+    const std::string ext = urlExtensionLower(requestUrl);
+    if (isLikelyWrapperExtension(ext)) {
+        return ext;
+    }
+
+    const std::string lowerContentType = toLowerCopy(fetched.contentType);
+    if (lowerContentType.find("audio/x-scpls") != std::string::npos) {
+        return ".pls";
+    }
+    if (lowerContentType.find("mpegurl") != std::string::npos) {
+        return ".m3u";
+    }
+    if (lowerContentType.find("xspf") != std::string::npos) {
+        return ".xspf";
+    }
+    if (lowerContentType.find("rss") != std::string::npos || lowerContentType.find("atom") != std::string::npos) {
+        return ".xml";
+    }
+
+    return ".m3u";
+}
+
+std::optional<std::filesystem::path> writeWrapperResponseToTempFile(
+    const TextUrlResponse& fetched,
+    const std::string& requestUrl,
+    Logger& logger)
+{
+    if (!fetched.ok || fetched.body.empty()) {
+        return std::nullopt;
+    }
+
+    const std::size_t bytesToWrite = std::min<std::size_t>(fetched.body.size(), kMaxWrapperTempBytes);
+    if (bytesToWrite == 0) {
+        return std::nullopt;
+    }
+
+    std::filesystem::path tempDir;
+    wchar_t tempPathBuf[MAX_PATH + 1]{};
+    const DWORD tempLen = GetTempPathW(static_cast<DWORD>(std::size(tempPathBuf)), tempPathBuf);
+    if (tempLen > 0 && tempLen < std::size(tempPathBuf)) {
+        tempDir = std::filesystem::path(tempPathBuf);
+    } else {
+        std::error_code ec;
+        tempDir = std::filesystem::temp_directory_path(ec);
+        if (ec) {
+            tempDir = std::filesystem::path(".");
+        }
+    }
+
+    const std::string fileName = "RadioSFSE_stream_wrapper_" +
+        std::to_string(GetCurrentProcessId()) + "_" +
+        std::to_string(static_cast<unsigned long long>(GetTickCount64())) +
+        wrapperExtensionForResponse(fetched, requestUrl);
+    const std::filesystem::path tempFile = tempDir / fileName;
+
+    std::ofstream out(tempFile, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        logger.warn("Stream wrapper fallback failed: could not create temp file " + tempFile.string());
+        return std::nullopt;
+    }
+
+    out.write(fetched.body.data(), static_cast<std::streamsize>(bytesToWrite));
+    out.flush();
+    if (!out.good()) {
+        out.close();
+        std::error_code removeEc;
+        std::filesystem::remove(tempFile, removeEc);
+        logger.warn("Stream wrapper fallback failed: could not write temp file " + tempFile.string());
+        return std::nullopt;
+    }
+
+    if (bytesToWrite < fetched.body.size()) {
+        logger.warn("Stream wrapper text truncated to " + std::to_string(kMaxWrapperTempBytes) + " bytes.");
+    }
+
+    return tempFile;
+}
 
 std::string wideToUtf8Local(const std::wstring& text)
 {
@@ -84,6 +811,16 @@ std::filesystem::path expandWindowsEnvironmentVariables(const std::string& text)
 }
 }
 
+struct RadioEngine::MfState
+{
+    bool comInitialized{ false };
+    bool ownsComInitialization{ false };
+    bool mfInitialized{ false };
+    std::shared_ptr<MfEventState> events{};
+    Microsoft::WRL::ComPtr<IMFPMediaPlayerCallback> callback{};
+    Microsoft::WRL::ComPtr<IMFPMediaPlayer> player{};
+};
+
 RadioEngine::RadioEngine(Logger& logger) :
     logger_(logger)
 {
@@ -128,6 +865,8 @@ void RadioEngine::shutdown()
     }
 
     if (!shouldJoin) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        shutdownMediaFoundationLocked();
         return;
     }
 
@@ -547,11 +1286,13 @@ bool RadioEngine::volumeUp(float step, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, step]() {
         DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
-        const float delta = step > 0.0F ? step : 0.1F;
-        device.volumeGain = std::clamp(device.volumeGain + delta, 0.0F, 2.0F);
+        const float deltaPercent = step > 0.0F ? step : kDefaultVolumeStepPercent;
+        const float deltaGain = deltaPercent / kDefaultVolumePercent;
+        device.volumeGain = std::clamp(device.volumeGain + deltaGain, 0.0F, 2.0F);
         updateFadeVolumeLocked();
         logger_.info("volumeUp deviceId=" + std::to_string(currentDeviceId_) +
-                     " gain=" + std::to_string(device.volumeGain));
+                     " gain=" + std::to_string(device.volumeGain) +
+                     " volume=" + std::to_string(device.volumeGain * kDefaultVolumePercent));
         return true;
     });
 }
@@ -560,11 +1301,13 @@ bool RadioEngine::volumeDown(float step, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, step]() {
         DeviceState& device = ensureDeviceStateLocked(currentDeviceId_);
-        const float delta = step > 0.0F ? step : 0.1F;
-        device.volumeGain = std::clamp(device.volumeGain - delta, 0.0F, 2.0F);
+        const float deltaPercent = step > 0.0F ? step : kDefaultVolumeStepPercent;
+        const float deltaGain = deltaPercent / kDefaultVolumePercent;
+        device.volumeGain = std::clamp(device.volumeGain - deltaGain, 0.0F, 2.0F);
         updateFadeVolumeLocked();
         logger_.info("volumeDown deviceId=" + std::to_string(currentDeviceId_) +
-                     " gain=" + std::to_string(device.volumeGain));
+                     " gain=" + std::to_string(device.volumeGain) +
+                     " volume=" + std::to_string(device.volumeGain * kDefaultVolumePercent));
         return true;
     });
 }
@@ -1163,15 +1906,31 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
         logger_.warn("MCI alias still open before file play. Attempting reopen anyway.");
     }
 
-    const std::wstring openCmd = L"open " + quoteForMCI(filePath) + L" type mpegvideo alias " + kAlias;
-    if (!mciCommandLocked(openCmd)) {
-        state_ = PlaybackState::Stopped;
-        currentTrackPath_.clear();
-        lastVolume_ = -1;
-        lastLeftVolume_ = -1;
-        lastRightVolume_ = -1;
-        trackStartValid_ = false;
-        return false;
+    const std::wstring quotedPath = quoteForMCI(filePath);
+    bool opened = mciCommandLocked(L"open " + quotedPath + L" alias " + kAlias);
+    if (!opened) {
+        opened = mciCommandLocked(L"open " + quotedPath + L" type mpegvideo alias " + kAlias);
+    }
+    if (!opened) {
+        logger_.warn("MCI local open failed. Trying Media Foundation fallback for: " + pathToUtf8(filePath));
+        if (!startMediaFoundationStreamLocked(pathToUtf8(filePath))) {
+            state_ = PlaybackState::Stopped;
+            currentTrackPath_.clear();
+            lastVolume_ = -1;
+            lastLeftVolume_ = -1;
+            lastRightVolume_ = -1;
+            trackStartValid_ = false;
+            return false;
+        }
+
+        currentTrackPath_ = filePath;
+        backend_ = PlaybackBackend::MediaFoundationStream;
+        state_ = PlaybackState::Playing;
+        trackStartTime_ = std::chrono::steady_clock::now();
+        trackStartValid_ = true;
+        updateFadeVolumeLocked();
+        logger_.info("Now playing (Media Foundation fallback): " + pathToUtf8(filePath));
+        return true;
     }
 
     (void)mciCommandLocked(L"set " + std::wstring(kAlias) + L" time format milliseconds");
@@ -1187,6 +1946,7 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     }
 
     currentTrackPath_ = filePath;
+    backend_ = PlaybackBackend::MCI;
     state_ = PlaybackState::Playing;
     trackStartTime_ = std::chrono::steady_clock::now();
     trackStartValid_ = true;
@@ -1196,12 +1956,170 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     return true;
 }
 
+bool RadioEngine::ensureMediaFoundationLocked()
+{
+    if (!mfState_) {
+        mfState_ = std::make_unique<MfState>();
+    }
+
+    if (!mfState_->comInitialized) {
+        const HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(coHr)) {
+            mfState_->comInitialized = true;
+            mfState_->ownsComInitialization = true;
+        } else if (coHr == RPC_E_CHANGED_MODE) {
+            mfState_->comInitialized = true;
+            mfState_->ownsComInitialization = false;
+        } else {
+            logger_.warn("Media Foundation unavailable: CoInitializeEx failed: " + formatHresult(coHr));
+            return false;
+        }
+    }
+
+    if (!mfState_->mfInitialized) {
+        const HRESULT mfHr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
+        if (FAILED(mfHr)) {
+            logger_.warn("Media Foundation startup failed: " + formatHresult(mfHr));
+            return false;
+        }
+        mfState_->mfInitialized = true;
+    }
+
+    if (!mfState_->callback) {
+        mfState_->events = std::make_shared<MfEventState>();
+        mfState_->callback.Attach(new MfPlayerCallback(mfState_->events));
+    }
+
+    return true;
+}
+
+bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
+{
+    if (!ensureMediaFoundationLocked()) {
+        return false;
+    }
+    if (!mfState_ || !mfState_->callback) {
+        return false;
+    }
+
+    if (mfState_->player) {
+        (void)mfState_->player->Stop();
+        (void)mfState_->player->Shutdown();
+        mfState_->player.Reset();
+    }
+
+    mfState_->events->lastError.store(S_OK);
+    mfState_->events->playbackEnded.store(false);
+
+    const std::wstring wideUrl = utf8ToWide(streamUrl);
+    if (wideUrl.empty()) {
+        logger_.warn("Media Foundation stream open failed: URL conversion to UTF-16 returned empty.");
+        return false;
+    }
+
+    const HRESULT createHr = MFPCreateMediaPlayer(
+        wideUrl.c_str(),
+        FALSE,
+        MFP_OPTION_NONE,
+        mfState_->callback.Get(),
+        nullptr,
+        mfState_->player.ReleaseAndGetAddressOf());
+    if (FAILED(createHr) || !mfState_->player) {
+        logger_.warn("Media Foundation could not open stream: " + streamUrl +
+                     " | hr=" + formatHresult(createHr));
+        return false;
+    }
+
+    const HRESULT playHr = mfState_->player->Play();
+    if (FAILED(playHr)) {
+        logger_.warn("Media Foundation Play failed for stream: " + streamUrl +
+                     " | hr=" + formatHresult(playHr));
+        (void)mfState_->player->Shutdown();
+        mfState_->player.Reset();
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kStreamStartWaitTimeout;
+    MFP_MEDIAPLAYER_STATE lastState = MFP_MEDIAPLAYER_STATE_EMPTY;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const HRESULT asyncHr = mfState_->events->lastError.load();
+        if (FAILED(asyncHr)) {
+            logger_.warn("Media Foundation stream error: " + streamUrl +
+                         " | hr=" + formatHresult(asyncHr));
+            (void)mfState_->player->Stop();
+            (void)mfState_->player->Shutdown();
+            mfState_->player.Reset();
+            return false;
+        }
+
+        MFP_MEDIAPLAYER_STATE playerState = MFP_MEDIAPLAYER_STATE_EMPTY;
+        const HRESULT stateHr = mfState_->player->GetState(&playerState);
+        if (SUCCEEDED(stateHr)) {
+            lastState = playerState;
+            if (playerState == MFP_MEDIAPLAYER_STATE_PLAYING || playerState == MFP_MEDIAPLAYER_STATE_PAUSED) {
+                return true;
+            }
+            if (playerState == MFP_MEDIAPLAYER_STATE_SHUTDOWN) {
+                logger_.warn("Media Foundation stream state is shutdown: " + streamUrl);
+                (void)mfState_->player->Shutdown();
+                mfState_->player.Reset();
+                return false;
+            }
+        }
+
+        std::this_thread::sleep_for(kStreamStartPoll);
+    }
+
+    MFP_MEDIAPLAYER_STATE finalState = MFP_MEDIAPLAYER_STATE_EMPTY;
+    const HRESULT finalStateHr = mfState_->player->GetState(&finalState);
+    const HRESULT finalAsyncHr = mfState_->events->lastError.load();
+    if (SUCCEEDED(finalStateHr) &&
+        (finalState == MFP_MEDIAPLAYER_STATE_PLAYING || finalState == MFP_MEDIAPLAYER_STATE_PAUSED)) {
+        return true;
+    }
+
+    if (SUCCEEDED(finalStateHr)) {
+        lastState = finalState;
+    }
+    logger_.warn("Media Foundation stream did not enter PLAYING state in time: " + streamUrl +
+                 " | state=" + mfStateName(lastState) +
+                 " | lastHr=" + formatHresult(finalAsyncHr));
+    (void)mfState_->player->Stop();
+    (void)mfState_->player->Shutdown();
+    mfState_->player.Reset();
+    return false;
+}
+
+void RadioEngine::shutdownMediaFoundationLocked()
+{
+    if (!mfState_) {
+        return;
+    }
+
+    if (mfState_->player) {
+        (void)mfState_->player->Stop();
+        (void)mfState_->player->Shutdown();
+        mfState_->player.Reset();
+    }
+
+    mfState_->callback.Reset();
+    mfState_->events.reset();
+
+    if (mfState_->mfInitialized) {
+        (void)MFShutdown();
+        mfState_->mfInitialized = false;
+    }
+
+    if (mfState_->comInitialized && mfState_->ownsComInitialization) {
+        CoUninitialize();
+        mfState_->comInitialized = false;
+        mfState_->ownsComInitialization = false;
+    }
+}
+
 bool RadioEngine::playStreamLocked(const std::string& streamUrl)
 {
     stopPlaybackDeviceLocked(true);
-    if (!waitForAliasClosedLocked(std::chrono::milliseconds(150))) {
-        logger_.warn("MCI alias still open before stream play. Attempting reopen anyway.");
-    }
 
     const std::string directUrl = trim(streamUrl);
     if (directUrl.empty()) {
@@ -1215,70 +2133,118 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         return false;
     }
 
-    const std::wstring quotedUrl = quoteForMCI(utf8ToWide(directUrl));
-
-    if (!mciCommandLocked(L"open " + quotedUrl + L" alias " + kAlias)) {
-        if (!mciCommandLocked(L"open " + quotedUrl + L" type mpegvideo alias " + kAlias)) {
-            state_ = PlaybackState::Stopped;
-            currentTrackPath_.clear();
-            lastVolume_ = -1;
-            lastLeftVolume_ = -1;
-            lastRightVolume_ = -1;
-            trackStartValid_ = false;
-            return false;
-        }
-    }
-
-    (void)mciCommandLocked(L"set " + std::wstring(kAlias) + L" time format milliseconds");
-    if (!mciCommandLocked(L"play " + std::wstring(kAlias))) {
-        (void)mciCommandLocked(L"close " + std::wstring(kAlias));
+    auto clearStreamState = [this]() {
+        backend_ = PlaybackBackend::None;
         state_ = PlaybackState::Stopped;
         currentTrackPath_.clear();
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
         lastRightVolume_ = -1;
         trackStartValid_ = false;
-        return false;
+    };
+
+    std::vector<std::string> candidates;
+    auto addCandidate = [&candidates](const std::string& url) {
+        const std::string trimmedUrl = trimAsciiCopy(url);
+        if (trimmedUrl.empty()) {
+            return;
+        }
+        const std::string lowered = toLowerCopy(trimmedUrl);
+        for (const auto& existing : candidates) {
+            if (toLowerCopy(existing) == lowered) {
+                return;
+            }
+        }
+        candidates.push_back(trimmedUrl);
+    };
+
+    addCandidate(directUrl);
+    addCandidate(httpsToHttpVariant(directUrl));
+    addCandidate(httpToHttpsVariant(directUrl));
+    for (const auto& variant : makeShoutcastStyleVariants(directUrl)) {
+        addCandidate(variant);
+        addCandidate(httpsToHttpVariant(variant));
+        addCandidate(httpToHttpsVariant(variant));
     }
 
-    currentTrackPath_.clear();
-    state_ = PlaybackState::Playing;
-    trackStartTime_ = std::chrono::steady_clock::now();
-    trackStartValid_ = true;
-    updateFadeVolumeLocked();
+    const std::string resolvedUrl = resolvePlayableStreamUrl(directUrl, logger_);
+    if (!resolvedUrl.empty() && toLower(resolvedUrl) != toLower(directUrl)) {
+        addCandidate(resolvedUrl);
+        addCandidate(httpsToHttpVariant(resolvedUrl));
+        addCandidate(httpToHttpsVariant(resolvedUrl));
+        for (const auto& variant : makeShoutcastStyleVariants(resolvedUrl)) {
+            addCandidate(variant);
+            addCandidate(httpsToHttpVariant(variant));
+            addCandidate(httpToHttpsVariant(variant));
+        }
+    }
 
-    logger_.info("Now streaming: " + directUrl);
-    return true;
+    for (const auto& candidate : candidates) {
+        if (startMediaFoundationStreamLocked(candidate)) {
+            streamWrapperTempPath_.clear();
+            currentTrackPath_.clear();
+            backend_ = PlaybackBackend::MediaFoundationStream;
+            state_ = PlaybackState::Playing;
+            trackStartTime_ = std::chrono::steady_clock::now();
+            trackStartValid_ = true;
+            updateFadeVolumeLocked();
+            if (candidate == directUrl) {
+                logger_.info("Now streaming: " + directUrl);
+            } else {
+                logger_.info("Now streaming: " + directUrl + " (resolved: " + candidate + ")");
+            }
+            return true;
+        }
+    }
+
+    clearStreamState();
+    logger_.warn("Stream play failed after all URL attempts: " + directUrl);
+    return false;
 }
 
 void RadioEngine::stopPlaybackDeviceLocked(bool closeDevice)
 {
-    (void)mciSendStringW((L"stop " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
-    if (!closeDevice) {
-        return;
-    }
-
-    bool closed = false;
-    for (int attempt = 0; attempt < 3 && !closed; ++attempt) {
-        const MCIERROR closeErr =
-            mciSendStringW((L"close " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
-        if (closeErr == 0) {
-            closed = waitForAliasClosedLocked(std::chrono::milliseconds(80));
-        } else {
-            std::wstring mode;
-            if (!mciStatusModeSilentLocked(mode)) {
-                closed = true;
+    if (backend_ == PlaybackBackend::MediaFoundationStream && mfState_ && mfState_->player) {
+        (void)mfState_->player->Stop();
+        if (closeDevice) {
+            (void)mfState_->player->Shutdown();
+            mfState_->player.Reset();
+            if (mfState_->events) {
+                mfState_->events->lastError.store(S_OK);
+                mfState_->events->playbackEnded.store(false);
             }
         }
+    } else {
+        (void)mciSendStringW((L"stop " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
+        if (closeDevice) {
+            bool closed = false;
+            for (int attempt = 0; attempt < 3 && !closed; ++attempt) {
+                const MCIERROR closeErr =
+                    mciSendStringW((L"close " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
+                if (closeErr == 0) {
+                    closed = waitForAliasClosedLocked(std::chrono::milliseconds(80));
+                } else {
+                    std::wstring mode;
+                    if (!mciStatusModeSilentLocked(mode)) {
+                        closed = true;
+                    }
+                }
 
-        if (!closed) {
-            (void)mciSendStringW((L"stop " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                if (!closed) {
+                    (void)mciSendStringW((L"stop " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+            }
+
+            if (!closed) {
+                logger_.warn("MCI alias did not close cleanly after retries.");
+            }
         }
     }
 
-    if (!closed) {
-        logger_.warn("MCI alias did not close cleanly after retries.");
+    if (closeDevice) {
+        backend_ = PlaybackBackend::None;
+        cleanupCurrentStreamTempFileLocked();
     }
 }
 
@@ -1288,10 +2254,23 @@ bool RadioEngine::resumeLocked()
         return false;
     }
 
-    if (!mciCommandLocked(L"resume " + std::wstring(kAlias))) {
-        if (!mciCommandLocked(L"play " + std::wstring(kAlias))) {
-            logger_.warn("resume failed.");
+    if (backend_ == PlaybackBackend::MediaFoundationStream) {
+        if (!mfState_ || !mfState_->player) {
+            logger_.warn("resume failed. Stream backend player is not available.");
             return false;
+        }
+
+        const HRESULT playHr = mfState_->player->Play();
+        if (FAILED(playHr)) {
+            logger_.warn("resume failed. Media Foundation Play failed: " + formatHresult(playHr));
+            return false;
+        }
+    } else {
+        if (!mciCommandLocked(L"resume " + std::wstring(kAlias))) {
+            if (!mciCommandLocked(L"play " + std::wstring(kAlias))) {
+                logger_.warn("resume failed.");
+                return false;
+            }
         }
     }
 
@@ -1306,9 +2285,22 @@ bool RadioEngine::pauseLocked()
         return false;
     }
 
-    if (!mciCommandLocked(L"pause " + std::wstring(kAlias))) {
-        logger_.warn("pause failed.");
-        return false;
+    if (backend_ == PlaybackBackend::MediaFoundationStream) {
+        if (!mfState_ || !mfState_->player) {
+            logger_.warn("pause failed. Stream backend player is not available.");
+            return false;
+        }
+
+        const HRESULT pauseHr = mfState_->player->Pause();
+        if (FAILED(pauseHr)) {
+            logger_.warn("pause failed. Media Foundation Pause failed: " + formatHresult(pauseHr));
+            return false;
+        }
+    } else {
+        if (!mciCommandLocked(L"pause " + std::wstring(kAlias))) {
+            logger_.warn("pause failed.");
+            return false;
+        }
     }
 
     state_ = PlaybackState::Paused;
@@ -1439,9 +2431,40 @@ bool RadioEngine::isTrackCompleteLocked()
     if (trackStartValid_) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - trackStartTime_);
-        if (elapsed < std::chrono::milliseconds(800)) {
+        const auto minProbeTime = (backend_ == PlaybackBackend::MediaFoundationStream)
+            ? std::chrono::milliseconds(2500)
+            : std::chrono::milliseconds(800);
+        if (elapsed < minProbeTime) {
             return false;
         }
+    }
+
+    if (backend_ == PlaybackBackend::MediaFoundationStream) {
+        if (!mfState_ || !mfState_->player) {
+            logger_.warn("Media Foundation player missing while state=Playing. Treating stream as complete.");
+            return true;
+        }
+        if (mfState_->events) {
+            const HRESULT asyncHr = mfState_->events->lastError.load();
+            if (FAILED(asyncHr)) {
+                logger_.warn("Media Foundation stream error while playing: " + formatHresult(asyncHr));
+                return true;
+            }
+            if (mfState_->events->playbackEnded.load()) {
+                logger_.warn("Media Foundation stream playback ended.");
+                return true;
+            }
+        }
+
+        MFP_MEDIAPLAYER_STATE playerState = MFP_MEDIAPLAYER_STATE_EMPTY;
+        const HRESULT stateHr = mfState_->player->GetState(&playerState);
+        if (FAILED(stateHr)) {
+            logger_.warn("Media Foundation GetState failed while playing: " + formatHresult(stateHr));
+            return true;
+        }
+
+        return !(playerState == MFP_MEDIAPLAYER_STATE_PLAYING ||
+                 playerState == MFP_MEDIAPLAYER_STATE_PAUSED);
     }
 
     std::wstring mode;
@@ -1586,7 +2609,22 @@ void RadioEngine::updateFadeVolumeLocked()
     }
 
     bool ok = true;
-    if (config_.enableSpatialPan && panControlsAvailable_) {
+    if (backend_ == PlaybackBackend::MediaFoundationStream) {
+        if (!mfState_ || !mfState_->player) {
+            logger_.warn("Media Foundation player missing while applying volume.");
+            return;
+        }
+
+        const float streamVolume = static_cast<float>(std::clamp(factor * gain, 0.0, 1.0));
+        const HRESULT hr = mfState_->player->SetVolume(streamVolume);
+        if (FAILED(hr)) {
+            logger_.warn("Media Foundation SetVolume failed: " + formatHresult(hr));
+            return;
+        }
+
+        leftVolume = volume;
+        rightVolume = volume;
+    } else if (config_.enableSpatialPan && panControlsAvailable_) {
         const bool leftOk =
             mciCommandLocked(L"setaudio " + std::wstring(kAlias) + L" left volume to " + std::to_wstring(leftVolume));
         const bool rightOk =
@@ -1703,6 +2741,21 @@ bool RadioEngine::waitForAliasClosedLocked(std::chrono::milliseconds timeout)
 
     std::wstring mode;
     return !mciStatusModeSilentLocked(mode);
+}
+
+void RadioEngine::cleanupCurrentStreamTempFileLocked()
+{
+    if (streamWrapperTempPath_.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    const bool removed = std::filesystem::remove(streamWrapperTempPath_, ec);
+    if (!removed && ec) {
+        logger_.warn("Failed to remove temp stream wrapper file: " + pathToUtf8(streamWrapperTempPath_));
+    }
+
+    streamWrapperTempPath_.clear();
 }
 
 RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
@@ -1846,9 +2899,14 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
     });
 
     cv_.notify_all();
-    cv_.wait(lock, [this, pending]() {
+    const bool completed = cv_.wait_for(lock, kCommandWaitTimeout, [this, pending]() {
         return pending->done || !workerRunning_;
     });
+    if (!completed) {
+        logger_.error("Radio command timed out waiting for worker completion (deviceId=" +
+                      std::to_string(deviceId) + ").");
+        return false;
+    }
 
     return pending->done ? pending->result : false;
 }
@@ -1894,6 +2952,7 @@ void RadioEngine::workerLoop()
     state_ = PlaybackState::Stopped;
     mode_ = PlaybackMode::None;
     trackStartValid_ = false;
+    shutdownMediaFoundationLocked();
     syncCurrentDeviceStateLocked();
     workerThreadId_ = {};
 }
