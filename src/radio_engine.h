@@ -77,7 +77,8 @@ private:
     {
         None,
         MCI,
-        MediaFoundationStream
+        MediaFoundationStream,
+        DirectShowStream
     };
 
     struct Position
@@ -97,9 +98,10 @@ private:
         float maxFadeDistance{ 5000.0F };
         bool enableSpatialPan{ true };
         float panDistance{ 1200.0F };
-        bool logFadeChanges{ true };
+        bool logFadeChanges{ false };
         bool autoRescanOnChangePlaylist{ true };
         bool loopPlaylist{ true };
+        bool verboseStreamDiagnostics{ false };
         std::vector<std::pair<std::string, std::string>> streamStations;
     };
 
@@ -168,8 +170,10 @@ private:
     bool playPathLocked(const std::filesystem::path& filePath);
     bool playStreamLocked(const std::string& streamUrl);
     bool ensureMediaFoundationLocked();
-    bool startMediaFoundationStreamLocked(const std::string& streamUrl);
+    bool startMediaFoundationStreamLocked(const std::string& streamUrl, bool detailedLogs = true);
+    bool startDirectShowStreamLocked(const std::string& streamUrl, bool detailedLogs = true);
     void shutdownMediaFoundationLocked();
+    void shutdownDirectShowLocked();
     void stopPlaybackDeviceLocked(bool closeDevice);
     bool resumeLocked();
     bool pauseLocked();
@@ -206,7 +210,9 @@ private:
     std::thread::id workerThreadId_{};
     std::deque<std::function<void()>> commandQueue_{};
     struct MfState;
+    struct DsState;
     std::unique_ptr<MfState> mfState_{};
+    std::unique_ptr<DsState> dsState_{};
 
     Config config_{};
     std::map<std::string, ChannelEntry> channels_;

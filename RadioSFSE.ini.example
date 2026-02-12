@@ -11,12 +11,18 @@ ad_prefix=ad_
 # Station behavior.
 ad_interval_songs=3
 
+# Logging controls (quiet by default).
+# log_level: info | warn | error
+log_level=warn
+# When true, logs every stream backend attempt/failure detail.
+verbose_stream_diagnostics=false
+
 # Distance fade in game units. For interior/object-local radios, start with small values.
 min_fade_distance=0
 max_fade_distance=35
 enable_spatial_pan=true
 pan_distance=40
-log_fade_changes=true
+log_fade_changes=false
 
 # Scan controls.
 auto_rescan_on_change_playlist=true

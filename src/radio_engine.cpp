@@ -14,6 +14,7 @@
 #include <regex>
 
 #include <windows.h>
+#include <dshow.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfplay.h>
@@ -821,6 +822,14 @@ struct RadioEngine::MfState
     Microsoft::WRL::ComPtr<IMFPMediaPlayer> player{};
 };
 
+struct RadioEngine::DsState
+{
+    Microsoft::WRL::ComPtr<IGraphBuilder> graph{};
+    Microsoft::WRL::ComPtr<IMediaControl> control{};
+    Microsoft::WRL::ComPtr<IMediaEvent> events{};
+    Microsoft::WRL::ComPtr<IBasicAudio> audio{};
+};
+
 RadioEngine::RadioEngine(Logger& logger) :
     logger_(logger)
 {
@@ -866,6 +875,7 @@ void RadioEngine::shutdown()
 
     if (!shouldJoin) {
         std::lock_guard<std::mutex> lock(mutex_);
+        shutdownDirectShowLocked();
         shutdownMediaFoundationLocked();
         return;
     }
@@ -1559,6 +1569,10 @@ bool RadioEngine::loadConfig()
         try {
             if (key == "root_path") {
                 config_.radioRootPath = expandWindowsEnvironmentVariables(value);
+            } else if (key == "log_level") {
+                if (!logger_.setLevelFromString(value)) {
+                    logger_.warn("Invalid config value for key: log_level (" + value + ")");
+                }
             } else if (key == "transition_prefix") {
                 config_.transitionPrefix = value;
             } else if (key == "ad_prefix") {
@@ -1579,6 +1593,8 @@ bool RadioEngine::loadConfig()
                 config_.autoRescanOnChangePlaylist = value == "1" || toLower(value) == "true";
             } else if (key == "loop_playlist") {
                 config_.loopPlaylist = value == "1" || toLower(value) == "true";
+            } else if (key == "verbose_stream_diagnostics") {
+                config_.verboseStreamDiagnostics = value == "1" || toLower(value) == "true";
             } else if (key == "stream_station") {
                 const auto sep = value.find('|');
                 if (sep == std::string::npos) {
@@ -1913,7 +1929,7 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     }
     if (!opened) {
         logger_.warn("MCI local open failed. Trying Media Foundation fallback for: " + pathToUtf8(filePath));
-        if (!startMediaFoundationStreamLocked(pathToUtf8(filePath))) {
+        if (!startMediaFoundationStreamLocked(pathToUtf8(filePath), true)) {
             state_ = PlaybackState::Stopped;
             currentTrackPath_.clear();
             lastVolume_ = -1;
@@ -1993,7 +2009,7 @@ bool RadioEngine::ensureMediaFoundationLocked()
     return true;
 }
 
-bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
+bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl, bool detailedLogs)
 {
     if (!ensureMediaFoundationLocked()) {
         return false;
@@ -2013,27 +2029,33 @@ bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
 
     const std::wstring wideUrl = utf8ToWide(streamUrl);
     if (wideUrl.empty()) {
-        logger_.warn("Media Foundation stream open failed: URL conversion to UTF-16 returned empty.");
+        if (detailedLogs) {
+            logger_.warn("Media Foundation stream open failed: URL conversion to UTF-16 returned empty.");
+        }
         return false;
     }
 
     const HRESULT createHr = MFPCreateMediaPlayer(
         wideUrl.c_str(),
         FALSE,
-        MFP_OPTION_NONE,
+        MFP_OPTION_FREE_THREADED_CALLBACK,
         mfState_->callback.Get(),
         nullptr,
         mfState_->player.ReleaseAndGetAddressOf());
     if (FAILED(createHr) || !mfState_->player) {
-        logger_.warn("Media Foundation could not open stream: " + streamUrl +
-                     " | hr=" + formatHresult(createHr));
+        if (detailedLogs) {
+            logger_.warn("Media Foundation could not open stream: " + streamUrl +
+                         " | hr=" + formatHresult(createHr));
+        }
         return false;
     }
 
     const HRESULT playHr = mfState_->player->Play();
     if (FAILED(playHr)) {
-        logger_.warn("Media Foundation Play failed for stream: " + streamUrl +
-                     " | hr=" + formatHresult(playHr));
+        if (detailedLogs) {
+            logger_.warn("Media Foundation Play failed for stream: " + streamUrl +
+                         " | hr=" + formatHresult(playHr));
+        }
         (void)mfState_->player->Shutdown();
         mfState_->player.Reset();
         return false;
@@ -2044,8 +2066,10 @@ bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
     while (std::chrono::steady_clock::now() < deadline) {
         const HRESULT asyncHr = mfState_->events->lastError.load();
         if (FAILED(asyncHr)) {
-            logger_.warn("Media Foundation stream error: " + streamUrl +
-                         " | hr=" + formatHresult(asyncHr));
+            if (detailedLogs) {
+                logger_.warn("Media Foundation stream error: " + streamUrl +
+                             " | hr=" + formatHresult(asyncHr));
+            }
             (void)mfState_->player->Stop();
             (void)mfState_->player->Shutdown();
             mfState_->player.Reset();
@@ -2060,7 +2084,9 @@ bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
                 return true;
             }
             if (playerState == MFP_MEDIAPLAYER_STATE_SHUTDOWN) {
-                logger_.warn("Media Foundation stream state is shutdown: " + streamUrl);
+                if (detailedLogs) {
+                    logger_.warn("Media Foundation stream state is shutdown: " + streamUrl);
+                }
                 (void)mfState_->player->Shutdown();
                 mfState_->player.Reset();
                 return false;
@@ -2081,9 +2107,11 @@ bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl)
     if (SUCCEEDED(finalStateHr)) {
         lastState = finalState;
     }
-    logger_.warn("Media Foundation stream did not enter PLAYING state in time: " + streamUrl +
-                 " | state=" + mfStateName(lastState) +
-                 " | lastHr=" + formatHresult(finalAsyncHr));
+    if (detailedLogs) {
+        logger_.warn("Media Foundation stream did not enter PLAYING state in time: " + streamUrl +
+                     " | state=" + mfStateName(lastState) +
+                     " | lastHr=" + formatHresult(finalAsyncHr));
+    }
     (void)mfState_->player->Stop();
     (void)mfState_->player->Shutdown();
     mfState_->player.Reset();
@@ -2115,6 +2143,116 @@ void RadioEngine::shutdownMediaFoundationLocked()
         mfState_->comInitialized = false;
         mfState_->ownsComInitialization = false;
     }
+}
+
+bool RadioEngine::startDirectShowStreamLocked(const std::string& streamUrl, bool detailedLogs)
+{
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool needsUninit = SUCCEEDED(coHr);
+    if (coHr == RPC_E_CHANGED_MODE) {
+        coHr = S_OK;
+    }
+    if (FAILED(coHr)) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow unavailable: CoInitializeEx failed: " + formatHresult(coHr));
+        }
+        return false;
+    }
+
+    if (!dsState_) {
+        dsState_ = std::make_unique<DsState>();
+    } else {
+        shutdownDirectShowLocked();
+    }
+
+    auto cleanupOnFailure = [this, needsUninit]() {
+        shutdownDirectShowLocked();
+        if (needsUninit) {
+            CoUninitialize();
+        }
+    };
+
+    const HRESULT graphHr = CoCreateInstance(
+        CLSID_FilterGraph,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_IGraphBuilder,
+        reinterpret_cast<void**>(dsState_->graph.ReleaseAndGetAddressOf()));
+    if (FAILED(graphHr) || !dsState_->graph) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow graph creation failed for stream: " + streamUrl +
+                         " | hr=" + formatHresult(graphHr));
+        }
+        cleanupOnFailure();
+        return false;
+    }
+
+    const HRESULT controlHr = dsState_->graph.As(&dsState_->control);
+    const HRESULT eventHr = dsState_->graph.As(&dsState_->events);
+    (void)dsState_->graph.As(&dsState_->audio);
+    if (FAILED(controlHr) || FAILED(eventHr) || !dsState_->control || !dsState_->events) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow interface query failed for stream: " + streamUrl +
+                         " | controlHr=" + formatHresult(controlHr) +
+                         " | eventHr=" + formatHresult(eventHr));
+        }
+        cleanupOnFailure();
+        return false;
+    }
+
+    const std::wstring wideUrl = utf8ToWide(streamUrl);
+    if (wideUrl.empty()) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow stream open failed: URL conversion to UTF-16 returned empty.");
+        }
+        cleanupOnFailure();
+        return false;
+    }
+
+    const HRESULT renderHr = dsState_->graph->RenderFile(wideUrl.c_str(), nullptr);
+    if (FAILED(renderHr)) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow could not render stream: " + streamUrl +
+                         " | hr=" + formatHresult(renderHr));
+        }
+        cleanupOnFailure();
+        return false;
+    }
+
+    const HRESULT runHr = dsState_->control->Run();
+    if (FAILED(runHr)) {
+        if (detailedLogs) {
+            logger_.warn("DirectShow could not run stream: " + streamUrl +
+                         " | hr=" + formatHresult(runHr));
+        }
+        cleanupOnFailure();
+        return false;
+    }
+
+    if (needsUninit) {
+        // Keep COM initialized for this thread lifetime; matching uninit happens on shutdown.
+        if (mfState_) {
+            mfState_->comInitialized = true;
+            mfState_->ownsComInitialization = true;
+        }
+    }
+
+    return true;
+}
+
+void RadioEngine::shutdownDirectShowLocked()
+{
+    if (!dsState_) {
+        return;
+    }
+
+    if (dsState_->control) {
+        (void)dsState_->control->Stop();
+    }
+    dsState_->audio.Reset();
+    dsState_->events.Reset();
+    dsState_->control.Reset();
+    dsState_->graph.Reset();
 }
 
 bool RadioEngine::playStreamLocked(const std::string& streamUrl)
@@ -2158,29 +2296,38 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         candidates.push_back(trimmedUrl);
     };
 
-    addCandidate(directUrl);
-    addCandidate(httpsToHttpVariant(directUrl));
-    addCandidate(httpToHttpsVariant(directUrl));
-    for (const auto& variant : makeShoutcastStyleVariants(directUrl)) {
-        addCandidate(variant);
-        addCandidate(httpsToHttpVariant(variant));
-        addCandidate(httpToHttpsVariant(variant));
-    }
-
     const std::string resolvedUrl = resolvePlayableStreamUrl(directUrl, logger_);
-    if (!resolvedUrl.empty() && toLower(resolvedUrl) != toLower(directUrl)) {
-        addCandidate(resolvedUrl);
-        addCandidate(httpsToHttpVariant(resolvedUrl));
-        addCandidate(httpToHttpsVariant(resolvedUrl));
-        for (const auto& variant : makeShoutcastStyleVariants(resolvedUrl)) {
+    const bool directLooksWrapper = isLikelyWrapperExtension(urlExtensionLower(directUrl));
+    const bool hasResolvedAlternative =
+        !resolvedUrl.empty() && toLower(resolvedUrl) != toLower(directUrl);
+
+    auto addCandidateFamily = [&addCandidate](const std::string& baseUrl) {
+        addCandidate(baseUrl);
+        addCandidate(httpsToHttpVariant(baseUrl));
+        addCandidate(httpToHttpsVariant(baseUrl));
+
+        if (isLikelyWrapperExtension(urlExtensionLower(baseUrl))) {
+            return;
+        }
+        for (const auto& variant : makeShoutcastStyleVariants(baseUrl)) {
             addCandidate(variant);
             addCandidate(httpsToHttpVariant(variant));
             addCandidate(httpToHttpsVariant(variant));
         }
+    };
+
+    if (!directLooksWrapper || !hasResolvedAlternative) {
+        addCandidateFamily(directUrl);
+    }
+    if (hasResolvedAlternative) {
+        addCandidateFamily(resolvedUrl);
+    }
+    if (candidates.empty()) {
+        addCandidate(directUrl);
     }
 
     for (const auto& candidate : candidates) {
-        if (startMediaFoundationStreamLocked(candidate)) {
+        if (startMediaFoundationStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
             streamWrapperTempPath_.clear();
             currentTrackPath_.clear();
             backend_ = PlaybackBackend::MediaFoundationStream;
@@ -2192,6 +2339,22 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
                 logger_.info("Now streaming: " + directUrl);
             } else {
                 logger_.info("Now streaming: " + directUrl + " (resolved: " + candidate + ")");
+            }
+            return true;
+        }
+
+        if (startDirectShowStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
+            streamWrapperTempPath_.clear();
+            currentTrackPath_.clear();
+            backend_ = PlaybackBackend::DirectShowStream;
+            state_ = PlaybackState::Playing;
+            trackStartTime_ = std::chrono::steady_clock::now();
+            trackStartValid_ = true;
+            updateFadeVolumeLocked();
+            if (candidate == directUrl) {
+                logger_.info("Now streaming (DirectShow fallback): " + directUrl);
+            } else {
+                logger_.info("Now streaming (DirectShow fallback): " + directUrl + " (resolved: " + candidate + ")");
             }
             return true;
         }
@@ -2213,6 +2376,11 @@ void RadioEngine::stopPlaybackDeviceLocked(bool closeDevice)
                 mfState_->events->lastError.store(S_OK);
                 mfState_->events->playbackEnded.store(false);
             }
+        }
+    } else if (backend_ == PlaybackBackend::DirectShowStream && dsState_ && dsState_->control) {
+        (void)dsState_->control->Stop();
+        if (closeDevice) {
+            shutdownDirectShowLocked();
         }
     } else {
         (void)mciSendStringW((L"stop " + std::wstring(kAlias)).c_str(), nullptr, 0, nullptr);
@@ -2265,6 +2433,17 @@ bool RadioEngine::resumeLocked()
             logger_.warn("resume failed. Media Foundation Play failed: " + formatHresult(playHr));
             return false;
         }
+    } else if (backend_ == PlaybackBackend::DirectShowStream) {
+        if (!dsState_ || !dsState_->control) {
+            logger_.warn("resume failed. DirectShow backend player is not available.");
+            return false;
+        }
+
+        const HRESULT runHr = dsState_->control->Run();
+        if (FAILED(runHr)) {
+            logger_.warn("resume failed. DirectShow Run failed: " + formatHresult(runHr));
+            return false;
+        }
     } else {
         if (!mciCommandLocked(L"resume " + std::wstring(kAlias))) {
             if (!mciCommandLocked(L"play " + std::wstring(kAlias))) {
@@ -2294,6 +2473,17 @@ bool RadioEngine::pauseLocked()
         const HRESULT pauseHr = mfState_->player->Pause();
         if (FAILED(pauseHr)) {
             logger_.warn("pause failed. Media Foundation Pause failed: " + formatHresult(pauseHr));
+            return false;
+        }
+    } else if (backend_ == PlaybackBackend::DirectShowStream) {
+        if (!dsState_ || !dsState_->control) {
+            logger_.warn("pause failed. DirectShow backend player is not available.");
+            return false;
+        }
+
+        const HRESULT pauseHr = dsState_->control->Pause();
+        if (FAILED(pauseHr)) {
+            logger_.warn("pause failed. DirectShow Pause failed: " + formatHresult(pauseHr));
             return false;
         }
     } else {
@@ -2431,7 +2621,8 @@ bool RadioEngine::isTrackCompleteLocked()
     if (trackStartValid_) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - trackStartTime_);
-        const auto minProbeTime = (backend_ == PlaybackBackend::MediaFoundationStream)
+        const auto minProbeTime = (backend_ == PlaybackBackend::MediaFoundationStream ||
+                                   backend_ == PlaybackBackend::DirectShowStream)
             ? std::chrono::milliseconds(2500)
             : std::chrono::milliseconds(800);
         if (elapsed < minProbeTime) {
@@ -2465,6 +2656,37 @@ bool RadioEngine::isTrackCompleteLocked()
 
         return !(playerState == MFP_MEDIAPLAYER_STATE_PLAYING ||
                  playerState == MFP_MEDIAPLAYER_STATE_PAUSED);
+    }
+
+    if (backend_ == PlaybackBackend::DirectShowStream) {
+        if (!dsState_ || !dsState_->control) {
+            logger_.warn("DirectShow player missing while state=Playing. Treating stream as complete.");
+            return true;
+        }
+
+        if (dsState_->events) {
+            long eventCode = 0;
+            LONG_PTR param1 = 0;
+            LONG_PTR param2 = 0;
+            while (SUCCEEDED(dsState_->events->GetEvent(&eventCode, &param1, &param2, 0))) {
+                dsState_->events->FreeEventParams(eventCode, param1, param2);
+                if (eventCode == EC_COMPLETE || eventCode == EC_ERRORABORT) {
+                    logger_.warn("DirectShow stream event indicates completion/error: code=" + std::to_string(eventCode));
+                    return true;
+                }
+            }
+        }
+
+        OAFilterState filterState = State_Stopped;
+        const HRESULT stateHr = dsState_->control->GetState(0, &filterState);
+        if (FAILED(stateHr) && stateHr != VFW_S_STATE_INTERMEDIATE) {
+            logger_.warn("DirectShow GetState failed while playing: " + formatHresult(stateHr));
+            return true;
+        }
+        if (stateHr == VFW_S_STATE_INTERMEDIATE) {
+            return false;
+        }
+        return !(filterState == State_Running || filterState == State_Paused);
     }
 
     std::wstring mode;
@@ -2624,6 +2846,26 @@ void RadioEngine::updateFadeVolumeLocked()
 
         leftVolume = volume;
         rightVolume = volume;
+    } else if (backend_ == PlaybackBackend::DirectShowStream) {
+        if (!dsState_ || !dsState_->audio) {
+            leftVolume = volume;
+            rightVolume = volume;
+        } else {
+            long dsVolume = -10000;
+            const double scalar = std::clamp(factor * gain, 0.0, 1.0);
+            if (scalar > 0.0001) {
+                dsVolume = static_cast<long>(std::lround(2000.0 * std::log10(scalar)));
+                dsVolume = std::clamp(dsVolume, static_cast<long>(-10000), static_cast<long>(0));
+            }
+
+            const HRESULT hr = dsState_->audio->put_Volume(dsVolume);
+            if (FAILED(hr)) {
+                logger_.warn("DirectShow put_Volume failed: " + formatHresult(hr));
+                return;
+            }
+            leftVolume = volume;
+            rightVolume = volume;
+        }
     } else if (config_.enableSpatialPan && panControlsAvailable_) {
         const bool leftOk =
             mciCommandLocked(L"setaudio " + std::wstring(kAlias) + L" left volume to " + std::to_wstring(leftVolume));
@@ -2952,6 +3194,7 @@ void RadioEngine::workerLoop()
     state_ = PlaybackState::Stopped;
     mode_ = PlaybackMode::None;
     trackStartValid_ = false;
+    shutdownDirectShowLocked();
     shutdownMediaFoundationLocked();
     syncCurrentDeviceStateLocked();
     workerThreadId_ = {};

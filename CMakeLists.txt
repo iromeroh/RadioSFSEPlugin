@@ -59,6 +59,7 @@ target_link_libraries(RadioSFSEPlugin PRIVATE
     mfuuid
     ole32
     shell32
+    strmiids
     version
     wininet
     winmm

@@ -1,9 +1,11 @@
 #include "logger.h"
 
 #include <chrono>
+#include <cctype>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 
 #include <shlobj.h>
 
@@ -12,6 +14,14 @@ namespace
 std::filesystem::path fallbackLogPath()
 {
     return std::filesystem::path("Data") / "SFSE" / "Plugins" / "RadioSFSE.log";
+}
+
+std::string toLowerAscii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
 }
 }
 
@@ -34,24 +44,56 @@ bool Logger::initialize()
         return false;
     }
 
-    stream_ << '[' << timestamp() << "] [INFO] Logger initialized.\n";
-    stream_.flush();
+    if (static_cast<int>(Level::Info) >= static_cast<int>(minimumLevel_)) {
+        stream_ << '[' << timestamp() << "] [INFO] Logger initialized.\n";
+        stream_.flush();
+    }
     return true;
+}
+
+void Logger::setLevel(Level level)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    minimumLevel_ = level;
+}
+
+bool Logger::setLevelFromString(const std::string& levelText)
+{
+    const std::string lowered = toLowerAscii(levelText);
+    if (lowered == "info") {
+        setLevel(Level::Info);
+        return true;
+    }
+    if (lowered == "warn" || lowered == "warning") {
+        setLevel(Level::Warn);
+        return true;
+    }
+    if (lowered == "error" || lowered == "quiet") {
+        setLevel(Level::Error);
+        return true;
+    }
+    return false;
+}
+
+Logger::Level Logger::level() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return minimumLevel_;
 }
 
 void Logger::info(const std::string& message)
 {
-    write("INFO", message);
+    write(Level::Info, "INFO", message);
 }
 
 void Logger::warn(const std::string& message)
 {
-    write("WARN", message);
+    write(Level::Warn, "WARN", message);
 }
 
 void Logger::error(const std::string& message)
 {
-    write("ERROR", message);
+    write(Level::Error, "ERROR", message);
 }
 
 std::filesystem::path Logger::path() const
@@ -60,14 +102,17 @@ std::filesystem::path Logger::path() const
     return logPath_;
 }
 
-void Logger::write(const char* level, const std::string& message)
+void Logger::write(Level level, const char* levelLabel, const std::string& message)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!stream_.is_open()) {
         return;
     }
+    if (static_cast<int>(level) < static_cast<int>(minimumLevel_)) {
+        return;
+    }
 
-    stream_ << '[' << timestamp() << "] [" << level << "] " << message << '\n';
+    stream_ << '[' << timestamp() << "] [" << levelLabel << "] " << message << '\n';
     stream_.flush();
 }
 
