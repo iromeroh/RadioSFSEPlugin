@@ -22,6 +22,8 @@ Float Function getVolume(ObjectReference activatorRef) Global Native
 Bool Function setVolume(ObjectReference activatorRef, Float vol) Global Native
 String Function getTrack(ObjectReference activatorRef) Global Native
 Bool Function setTrack(ObjectReference activatorRef, String trackBasename) Global Native
+Bool Function playFx(ObjectReference activatorRef, String fxBasename) Global Native
+Bool Function stopFx(ObjectReference activatorRef) Global Native
 String Function lastError(ObjectReference activatorRef) Global Native
 
 ; Activator/player positional data feed for fade calculations.

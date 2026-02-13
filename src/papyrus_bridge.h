@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -64,6 +65,8 @@ private:
     static bool nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume);
     static std::string nativeGetTrack(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorRef, std::string trackBasename);
+    static bool nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef, std::string fxBasename);
+    static bool nativeStopFx(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::string nativeLastError(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeSetPositions(
         std::monostate,
@@ -86,6 +89,7 @@ private:
     std::uintptr_t lastCommandRef_{ 0 };
     std::chrono::steady_clock::time_point lastCommandTime_{};
     std::chrono::milliseconds commandDebounce_{ 200 };
+    std::atomic<bool> shuttingDown_{ false };
     mutable std::mutex lastErrorMutex_{};
     std::unordered_map<std::uint64_t, std::string> lastErrorByDevice_{};
 };

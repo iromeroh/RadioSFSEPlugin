@@ -8,6 +8,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -44,6 +45,12 @@ public:
     bool setVolume(float volume, std::uint64_t deviceId = 0);
     std::string getTrack(std::uint64_t deviceId = 0) const;
     bool setTrack(const std::string& trackBasename, std::uint64_t deviceId = 0);
+    bool playFx(const std::string& fxBasename, std::uint64_t deviceId = 0);
+    bool stopFx(std::uint64_t deviceId = 0);
+    void requestPlayInterrupt(std::uint64_t deviceId = 0);
+    bool playAsync(
+        std::uint64_t deviceId,
+        const std::function<void(bool result)>& completion = {});
 
     bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId = 0);
 
@@ -169,6 +176,11 @@ private:
     bool startCurrentLocked(PlaybackMode mode, bool resetPosition);
     bool playPathLocked(const std::filesystem::path& filePath);
     bool playStreamLocked(const std::string& streamUrl);
+    bool playFxLocked(const std::filesystem::path& filePath);
+    void stopFxLocked();
+    std::optional<std::filesystem::path> findFxPathLocked(const std::string& fxBasename);
+    bool isPlayInterruptRequested() const;
+    void clearPlayInterruptRequest();
     bool ensureMediaFoundationLocked();
     bool startMediaFoundationStreamLocked(const std::string& streamUrl, bool detailedLogs = true);
     bool startDirectShowStreamLocked(const std::string& streamUrl, bool detailedLogs = true);
@@ -192,6 +204,10 @@ private:
     bool mciStatusModeSilentLocked(std::wstring& outMode);
     bool waitForAliasClosedLocked(std::chrono::milliseconds timeout);
     void cleanupCurrentStreamTempFileLocked();
+    bool runAsyncCommandForDevice(
+        std::uint64_t deviceId,
+        const std::function<bool()>& command,
+        const std::function<void(bool result)>& completion = {});
     bool runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command);
     DeviceState makeCurrentDeviceStateLocked() const;
     void applyDeviceStateLocked(const DeviceState& state);
@@ -216,6 +232,7 @@ private:
 
     Config config_{};
     std::map<std::string, ChannelEntry> channels_;
+    std::map<std::string, std::filesystem::path> fxFiles_;
     std::vector<std::string> streamOrderKeys_;
     std::unordered_map<std::uint64_t, DeviceState> deviceStates_;
     std::uint64_t currentDeviceId_{ 0 };
@@ -241,4 +258,5 @@ private:
     std::chrono::steady_clock::time_point trackStartTime_{};
     bool trackStartValid_{ false };
     std::filesystem::path streamWrapperTempPath_;
+    std::atomic<bool> playInterruptRequested_{ false };
 };

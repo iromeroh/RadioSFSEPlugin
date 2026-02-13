@@ -25,6 +25,7 @@
 namespace
 {
 constexpr wchar_t kAlias[] = L"RadioSFSE";
+constexpr wchar_t kFxAlias[] = L"RadioSFSE_FX";
 constexpr float kMinimumFadeGap = 1.0F;
 constexpr float kDefaultVolumePercent = 100.0F;
 constexpr float kMaximumVolumePercent = 200.0F;
@@ -373,10 +374,13 @@ struct TextUrlResponse
     std::string finalUrl;
 };
 
-TextUrlResponse fetchUrlText(const std::string& url)
+TextUrlResponse fetchUrlText(const std::string& url, const std::function<bool()>& shouldAbort = {})
 {
     TextUrlResponse response{};
     if (!isHttpUrl(url)) {
+        return response;
+    }
+    if (shouldAbort && shouldAbort()) {
         return response;
     }
 
@@ -430,6 +434,10 @@ TextUrlResponse fetchUrlText(const std::string& url)
     std::array<char, 4096> buffer{};
     DWORD read = 0;
     while (InternetReadFile(request, buffer.data(), static_cast<DWORD>(buffer.size()), &read) && read > 0) {
+        if (shouldAbort && shouldAbort()) {
+            break;
+        }
+
         const std::size_t remaining =
             response.body.size() < kMaxResolverBytes ? (kMaxResolverBytes - response.body.size()) : 0;
         if (remaining == 0) {
@@ -564,8 +572,16 @@ std::string parseXSPFFirstUrl(const std::string& body, const std::string& baseUr
     return combineRelativeUrl(baseUrl, xmlDecodeEntities(match[1].str()));
 }
 
-std::string resolvePlayableStreamUrl(const std::string& inputUrl, Logger& logger, int depth = 0)
+std::string resolvePlayableStreamUrl(
+    const std::string& inputUrl,
+    Logger& logger,
+    int depth = 0,
+    const std::function<bool()>& shouldAbort = {})
 {
+    if (shouldAbort && shouldAbort()) {
+        return inputUrl;
+    }
+
     if (depth > kMaxResolveDepth) {
         logger.warn("Stream resolver reached max recursion depth for URL: " + inputUrl);
         return inputUrl;
@@ -581,7 +597,7 @@ std::string resolvePlayableStreamUrl(const std::string& inputUrl, Logger& logger
         return trimmed;
     }
 
-    const TextUrlResponse fetched = fetchUrlText(trimmed);
+    const TextUrlResponse fetched = fetchUrlText(trimmed, shouldAbort);
     if (!fetched.ok) {
         return trimmed;
     }
@@ -632,7 +648,7 @@ std::string resolvePlayableStreamUrl(const std::string& inputUrl, Logger& logger
     logger.info("Resolved stream URL: " + trimmed + " -> " + resolved);
     const std::string resolvedExt = urlExtensionLower(resolved);
     if (isLikelyWrapperExtension(resolvedExt)) {
-        return resolvePlayableStreamUrl(resolved, logger, depth + 1);
+        return resolvePlayableStreamUrl(resolved, logger, depth + 1, shouldAbort);
     }
 
     return resolved;
@@ -882,6 +898,7 @@ void RadioEngine::shutdown()
 
     (void)runBoolCommandForDevice(currentDeviceId_, [this]() {
         stopPlaybackDeviceLocked(true);
+        stopFxLocked();
         state_ = PlaybackState::Stopped;
         mode_ = PlaybackMode::None;
         trackStartValid_ = false;
@@ -911,6 +928,7 @@ void RadioEngine::shutdown()
 
 bool RadioEngine::changePlaylist(const std::string& channelName, std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this, channelName]() {
         if (config_.autoRescanOnChangePlaylist) {
             scanLibraryLocked();
@@ -1007,6 +1025,7 @@ bool RadioEngine::pause(std::uint64_t deviceId)
 
 bool RadioEngine::stop(std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this]() {
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
@@ -1031,6 +1050,7 @@ bool RadioEngine::stop(std::uint64_t deviceId)
 
 bool RadioEngine::forward(std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this]() {
         return forwardLocked();
     });
@@ -1038,6 +1058,7 @@ bool RadioEngine::forward(std::uint64_t deviceId)
 
 bool RadioEngine::rewind(std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this]() {
         return rewindLocked();
     });
@@ -1072,6 +1093,7 @@ bool RadioEngine::isPlaying(std::uint64_t deviceId) const
 
 bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this, category]() {
         if (config_.autoRescanOnChangePlaylist) {
             scanLibraryLocked();
@@ -1160,6 +1182,7 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
 
 bool RadioEngine::selectNextSource(int category, std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this, category]() {
         if (config_.autoRescanOnChangePlaylist) {
             scanLibraryLocked();
@@ -1394,6 +1417,7 @@ std::string RadioEngine::getTrack(std::uint64_t deviceId) const
 
 bool RadioEngine::setTrack(const std::string& trackBasename, std::uint64_t deviceId)
 {
+    requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this, trackBasename]() {
         if (selectedKey_.empty()) {
             logger_.warn("setTrack failed. No source selected.");
@@ -1457,6 +1481,70 @@ bool RadioEngine::setTrack(const std::string& trackBasename, std::uint64_t devic
 
         return playPathLocked(currentTrackPath_);
     });
+}
+
+bool RadioEngine::playFx(const std::string& fxBasename, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, fxBasename]() {
+        const auto fxPath = findFxPathLocked(fxBasename);
+        if (!fxPath.has_value()) {
+            logger_.warn("playFx failed. FX file not found: " + fxBasename);
+            return false;
+        }
+        return playFxLocked(*fxPath);
+    });
+}
+
+bool RadioEngine::stopFx(std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this]() {
+        stopFxLocked();
+        return true;
+    });
+}
+
+void RadioEngine::requestPlayInterrupt(std::uint64_t)
+{
+    playInterruptRequested_.store(true, std::memory_order_release);
+}
+
+bool RadioEngine::playAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        clearPlayInterruptRequest();
+
+        if (selectedKey_.empty()) {
+            logger_.warn("play failed. No channel selected.");
+            return false;
+        }
+
+        if (state_ == PlaybackState::Paused) {
+            return resumeLocked();
+        }
+
+        const auto channelIt = channels_.find(selectedKey_);
+        if (channelIt == channels_.end()) {
+            logger_.warn("play failed. Selected channel no longer exists.");
+            return false;
+        }
+
+        const PlaybackMode desiredMode =
+            channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+
+        return startCurrentLocked(desiredMode, false);
+    }, completion);
+}
+
+bool RadioEngine::isPlayInterruptRequested() const
+{
+    return playInterruptRequested_.load(std::memory_order_acquire);
+}
+
+void RadioEngine::clearPlayInterruptRequest()
+{
+    playInterruptRequested_.store(false, std::memory_order_release);
 }
 
 std::string RadioEngine::currentChannel(std::uint64_t deviceId) const
@@ -1710,6 +1798,7 @@ std::wstring RadioEngine::quoteForMCI(const std::wstring& text)
 bool RadioEngine::scanLibraryLocked()
 {
     channels_.clear();
+    fxFiles_.clear();
     streamOrderKeys_.clear();
 
     const std::string transitionPrefixLower = toLower(config_.transitionPrefix);
@@ -1800,6 +1889,31 @@ bool RadioEngine::scanLibraryLocked()
     }
 
     addConfiguredStreamsLocked();
+
+    const std::filesystem::path fxRoot = config_.radioRootPath / "FX";
+    if (std::filesystem::exists(fxRoot) && std::filesystem::is_directory(fxRoot)) {
+        std::error_code fxEc;
+        for (std::filesystem::directory_iterator fxIt(fxRoot, fxEc), fxEnd; fxIt != fxEnd && !fxEc; fxIt.increment(fxEc)) {
+            if (!fxIt->is_regular_file()) {
+                continue;
+            }
+
+            const auto filePath = fxIt->path();
+            if (!hasAudioExtension(filePath)) {
+                continue;
+            }
+
+            const std::string fileNameLower = toLower(pathToUtf8(filePath.filename()));
+            const std::string stemLower = toLower(pathToUtf8(filePath.stem()));
+            if (!fileNameLower.empty() && !fxFiles_.contains(fileNameLower)) {
+                fxFiles_[fileNameLower] = filePath;
+            }
+            if (!stemLower.empty() && !fxFiles_.contains(stemLower)) {
+                fxFiles_[stemLower] = filePath;
+            }
+        }
+    }
+
     return !channels_.empty();
 }
 
@@ -1944,6 +2058,7 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
         state_ = PlaybackState::Playing;
         trackStartTime_ = std::chrono::steady_clock::now();
         trackStartValid_ = true;
+        stopFxLocked();
         updateFadeVolumeLocked();
         logger_.info("Now playing (Media Foundation fallback): " + pathToUtf8(filePath));
         return true;
@@ -1966,10 +2081,61 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     state_ = PlaybackState::Playing;
     trackStartTime_ = std::chrono::steady_clock::now();
     trackStartValid_ = true;
+    stopFxLocked();
     updateFadeVolumeLocked();
 
     logger_.info("Now playing: " + pathToUtf8(filePath));
     return true;
+}
+
+bool RadioEngine::playFxLocked(const std::filesystem::path& filePath)
+{
+    stopFxLocked();
+
+    const std::wstring quotedPath = quoteForMCI(filePath);
+    bool opened = mciCommandLocked(L"open " + quotedPath + L" alias " + kFxAlias);
+    if (!opened) {
+        opened = mciCommandLocked(L"open " + quotedPath + L" type mpegvideo alias " + kFxAlias);
+    }
+    if (!opened) {
+        return false;
+    }
+
+    if (!mciCommandLocked(L"play " + std::wstring(kFxAlias))) {
+        (void)mciCommandLocked(L"close " + std::wstring(kFxAlias));
+        return false;
+    }
+
+    return true;
+}
+
+void RadioEngine::stopFxLocked()
+{
+    (void)mciSendStringW((L"stop " + std::wstring(kFxAlias)).c_str(), nullptr, 0, nullptr);
+    (void)mciSendStringW((L"close " + std::wstring(kFxAlias)).c_str(), nullptr, 0, nullptr);
+}
+
+std::optional<std::filesystem::path> RadioEngine::findFxPathLocked(const std::string& fxBasename)
+{
+    const std::string key = toLower(trim(fxBasename));
+    if (key.empty()) {
+        return std::nullopt;
+    }
+
+    auto it = fxFiles_.find(key);
+    if (it != fxFiles_.end()) {
+        return it->second;
+    }
+
+    if (config_.autoRescanOnChangePlaylist) {
+        (void)scanLibraryLocked();
+        it = fxFiles_.find(key);
+        if (it != fxFiles_.end()) {
+            return it->second;
+        }
+    }
+
+    return std::nullopt;
 }
 
 bool RadioEngine::ensureMediaFoundationLocked()
@@ -2011,6 +2177,10 @@ bool RadioEngine::ensureMediaFoundationLocked()
 
 bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl, bool detailedLogs)
 {
+    if (isPlayInterruptRequested()) {
+        return false;
+    }
+
     if (!ensureMediaFoundationLocked()) {
         return false;
     }
@@ -2064,6 +2234,13 @@ bool RadioEngine::startMediaFoundationStreamLocked(const std::string& streamUrl,
     const auto deadline = std::chrono::steady_clock::now() + kStreamStartWaitTimeout;
     MFP_MEDIAPLAYER_STATE lastState = MFP_MEDIAPLAYER_STATE_EMPTY;
     while (std::chrono::steady_clock::now() < deadline) {
+        if (isPlayInterruptRequested()) {
+            (void)mfState_->player->Stop();
+            (void)mfState_->player->Shutdown();
+            mfState_->player.Reset();
+            return false;
+        }
+
         const HRESULT asyncHr = mfState_->events->lastError.load();
         if (FAILED(asyncHr)) {
             if (detailedLogs) {
@@ -2147,6 +2324,10 @@ void RadioEngine::shutdownMediaFoundationLocked()
 
 bool RadioEngine::startDirectShowStreamLocked(const std::string& streamUrl, bool detailedLogs)
 {
+    if (isPlayInterruptRequested()) {
+        return false;
+    }
+
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool needsUninit = SUCCEEDED(coHr);
     if (coHr == RPC_E_CHANGED_MODE) {
@@ -2209,12 +2390,22 @@ bool RadioEngine::startDirectShowStreamLocked(const std::string& streamUrl, bool
         return false;
     }
 
+    if (isPlayInterruptRequested()) {
+        cleanupOnFailure();
+        return false;
+    }
+
     const HRESULT renderHr = dsState_->graph->RenderFile(wideUrl.c_str(), nullptr);
     if (FAILED(renderHr)) {
         if (detailedLogs) {
             logger_.warn("DirectShow could not render stream: " + streamUrl +
                          " | hr=" + formatHresult(renderHr));
         }
+        cleanupOnFailure();
+        return false;
+    }
+
+    if (isPlayInterruptRequested()) {
         cleanupOnFailure();
         return false;
     }
@@ -2296,7 +2487,17 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         candidates.push_back(trimmedUrl);
     };
 
-    const std::string resolvedUrl = resolvePlayableStreamUrl(directUrl, logger_);
+    const std::string resolvedUrl = resolvePlayableStreamUrl(
+        directUrl,
+        logger_,
+        0,
+        [this]() {
+            return isPlayInterruptRequested();
+        });
+    if (isPlayInterruptRequested()) {
+        clearStreamState();
+        return false;
+    }
     const bool directLooksWrapper = isLikelyWrapperExtension(urlExtensionLower(directUrl));
     const bool hasResolvedAlternative =
         !resolvedUrl.empty() && toLower(resolvedUrl) != toLower(directUrl);
@@ -2327,6 +2528,11 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
     }
 
     for (const auto& candidate : candidates) {
+        if (isPlayInterruptRequested()) {
+            clearStreamState();
+            return false;
+        }
+
         if (startMediaFoundationStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
             streamWrapperTempPath_.clear();
             currentTrackPath_.clear();
@@ -2334,6 +2540,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
             state_ = PlaybackState::Playing;
             trackStartTime_ = std::chrono::steady_clock::now();
             trackStartValid_ = true;
+            stopFxLocked();
             updateFadeVolumeLocked();
             if (candidate == directUrl) {
                 logger_.info("Now streaming: " + directUrl);
@@ -2343,6 +2550,11 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
             return true;
         }
 
+        if (isPlayInterruptRequested()) {
+            clearStreamState();
+            return false;
+        }
+
         if (startDirectShowStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
             streamWrapperTempPath_.clear();
             currentTrackPath_.clear();
@@ -2350,6 +2562,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
             state_ = PlaybackState::Playing;
             trackStartTime_ = std::chrono::steady_clock::now();
             trackStartValid_ = true;
+            stopFxLocked();
             updateFadeVolumeLocked();
             if (candidate == directUrl) {
                 logger_.info("Now streaming (DirectShow fallback): " + directUrl);
@@ -3099,12 +3312,62 @@ void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
     }
 }
 
+bool RadioEngine::runAsyncCommandForDevice(
+    std::uint64_t deviceId,
+    const std::function<bool()>& command,
+    const std::function<void(bool result)>& completion)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    if (!workerRunning_ || std::this_thread::get_id() == workerThreadId_) {
+        switchToDeviceLocked(deviceId);
+        bool result = false;
+        try {
+            result = command();
+        } catch (const std::exception& ex) {
+            result = false;
+            logger_.error(std::string("Unhandled exception in async command: ") + ex.what());
+        } catch (...) {
+            result = false;
+            logger_.error("Unhandled unknown exception in async command.");
+        }
+        syncCurrentDeviceStateLocked();
+        if (completion) {
+            completion(result);
+        }
+        return true;
+    }
+
+    commandQueue_.emplace_back([this, command, completion, deviceId]() {
+        bool result = false;
+        try {
+            switchToDeviceLocked(deviceId);
+            result = command();
+        } catch (const std::exception& ex) {
+            result = false;
+            logger_.error(std::string("Unhandled exception in queued async command: ") + ex.what());
+        } catch (...) {
+            result = false;
+            logger_.error("Unhandled unknown exception in queued async command.");
+        }
+        syncCurrentDeviceStateLocked();
+        if (completion) {
+            completion(result);
+        }
+        cv_.notify_all();
+    });
+
+    cv_.notify_all();
+    return true;
+}
+
 bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command)
 {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!workerRunning_) {
         switchToDeviceLocked(deviceId);
+        clearPlayInterruptRequest();
         const bool result = command();
         syncCurrentDeviceStateLocked();
         return result;
@@ -3112,6 +3375,7 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
 
     if (std::this_thread::get_id() == workerThreadId_) {
         switchToDeviceLocked(deviceId);
+        clearPlayInterruptRequest();
         const bool result = command();
         syncCurrentDeviceStateLocked();
         return result;
@@ -3127,6 +3391,7 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
     commandQueue_.emplace_back([this, command, pending, deviceId]() {
         try {
             switchToDeviceLocked(deviceId);
+            clearPlayInterruptRequest();
             pending->result = command();
         } catch (const std::exception& ex) {
             pending->result = false;
@@ -3191,6 +3456,7 @@ void RadioEngine::workerLoop()
     }
 
     stopPlaybackDeviceLocked(true);
+    stopFxLocked();
     state_ = PlaybackState::Stopped;
     mode_ = PlaybackMode::None;
     trackStartValid_ = false;

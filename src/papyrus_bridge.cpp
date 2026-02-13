@@ -75,6 +75,7 @@ bool PapyrusBridge::initialize(const SFSEInterface* sfse)
     }
 
     g_instance_ = this;
+    shuttingDown_.store(false);
 
     if (!installMessagingListener(sfse)) {
         g_instance_ = nullptr;
@@ -88,6 +89,7 @@ bool PapyrusBridge::initialize(const SFSEInterface* sfse)
 
 void PapyrusBridge::shutdown()
 {
+    shuttingDown_.store(true);
     if (g_instance_ == this) {
         g_instance_ = nullptr;
     }
@@ -207,6 +209,8 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "setVolume", &PapyrusBridge::nativeSetVolume, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getTrack", &PapyrusBridge::nativeGetTrack, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setTrack", &PapyrusBridge::nativeSetTrack, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "playFx", &PapyrusBridge::nativePlayFx, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "stopFx", &PapyrusBridge::nativeStopFx, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "lastError", &PapyrusBridge::nativeLastError, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "set_positions", &PapyrusBridge::nativeSetPositions, std::nullopt, false);
 
@@ -298,13 +302,28 @@ void PapyrusBridge::nativePlay(std::monostate, RE::TESObjectREFR* activatorRef)
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.play(deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "play");
-        self->setLastError(deviceId, message);
-        self->logger_.warn("Papyrus play failed. " + message);
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.playAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        bridge->setLastError(deviceId, "Playback command failed.");
+        bridge->logger_.warn("Papyrus play failed.");
+    });
+
+    if (!queued) {
+        self->setLastError(deviceId, "Unable to queue playback command.");
+        self->logger_.warn("Papyrus play failed. Unable to queue command.");
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativeStart(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -606,6 +625,48 @@ bool PapyrusBridge::nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorR
     const bool ok = self->engine_.setTrack(trackBasename, deviceId);
     if (!ok) {
         self->setLastError(deviceId, buildFailureMessage(self->engine_, deviceId, "setTrack"));
+    } else {
+        self->clearLastError(deviceId);
+    }
+    return ok;
+}
+
+bool PapyrusBridge::nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef, std::string fxBasename)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("playFx", activatorRef)) {
+        return false;
+    }
+
+    const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
+    const bool ok = self->engine_.playFx(fxBasename, deviceId);
+    if (!ok) {
+        self->setLastError(deviceId, "FX not found or failed to play.");
+    } else {
+        self->clearLastError(deviceId);
+    }
+    return ok;
+}
+
+bool PapyrusBridge::nativeStopFx(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("stopFx", activatorRef)) {
+        return false;
+    }
+
+    const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
+    const bool ok = self->engine_.stopFx(deviceId);
+    if (!ok) {
+        self->setLastError(deviceId, "Unable to stop FX.");
     } else {
         self->clearLastError(deviceId);
     }
