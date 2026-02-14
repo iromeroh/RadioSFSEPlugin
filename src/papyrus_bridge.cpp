@@ -691,7 +691,8 @@ void PapyrusBridge::nativeSetPositions(
     float activatorZ,
     float playerX,
     float playerY,
-    float playerZ)
+    float playerZ,
+    float playerYawDeg)
 {
     PapyrusBridge* self = g_instance_;
     if (self == nullptr) {
@@ -706,6 +707,7 @@ void PapyrusBridge::nativeSetPositions(
             playerX,
             playerY,
             playerZ,
+            playerYawDeg,
             deviceId)) {
         self->setLastError(deviceId, "Unable to update positional audio sample.");
         self->logger_.warn("Papyrus set_positions failed.");

@@ -125,12 +125,13 @@ extern "C" __declspec(dllexport) bool set_positions(
     float emitterZ,
     float playerX,
     float playerY,
-    float playerZ)
+    float playerZ,
+    float playerYawDeg)
 {
     if (!g_engine) {
         return false;
     }
-    return g_engine->setPositions(emitterX, emitterY, emitterZ, playerX, playerY, playerZ);
+    return g_engine->setPositions(emitterX, emitterY, emitterZ, playerX, playerY, playerZ, playerYawDeg);
 }
 
 extern "C" __declspec(dllexport) bool is_playing()

@@ -76,7 +76,8 @@ private:
         float activatorZ,
         float playerX,
         float playerY,
-        float playerZ);
+        float playerZ,
+        float playerYawDeg);
 
     Logger& logger_;
     RadioEngine& engine_;
