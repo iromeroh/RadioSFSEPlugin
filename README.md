@@ -128,16 +128,21 @@ The DLL currently exports callable C symbols:
 
 `set_positions` drives distance attenuation and stereo pan updates from activator/player coordinates.
 
-## Papyrus Test Scripts
+## Papyrus Scripts
 
-Sample scripts in `scripts/` for quick CK wiring:
+`scripts/` is the repository source of truth for Papyrus sources used by this plugin/mod setup.
+
+Included:
+- `scripts/RadioSFSENative.psc`
 - `scripts/RadioSFSE_AutostartQuestScript.psc`
 - `scripts/RadioSFSE_PlaySlateScript.psc`
 - `scripts/RadioSFSE_StopSlateScript.psc`
-
-Suggested quick test:
-1. Create an auto-start quest and attach `RadioSFSE_AutostartQuestScript`.
-2. Set `StartupPlaylist` to `Default` and (optionally) assign `RadioEmitter`.
-3. Create two activator/slate objects with play/stop scripts for manual control.
-
+- `scripts/STAR_Start_Quest_Script.psc`
+- `scripts/STAR_radio_script.psc`
+- `scripts/STAR_Play_Stop_Control_Slate_Script.psc`
+- `scripts/STAR_Playlist_Control_Slate_Script.psc`
+- `scripts/STAR_Media_Type_Control_Slate.psc`
+- `scripts/STAR_Forward_Control_Slate_Script.psc`
+- `scripts/STAR_Player_Alias_Script.psc`
+- `scripts/STAR_Radio_Message_Script.psc`
 

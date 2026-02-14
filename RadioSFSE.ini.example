@@ -18,7 +18,7 @@ log_level=warn
 verbose_stream_diagnostics=false
 
 # Distance fade in game units. For interior/object-local radios, start with small values.
-min_fade_distance=0
+min_fade_distance=0.1
 max_fade_distance=35
 enable_spatial_pan=true
 pan_distance=40

@@ -1277,11 +1277,20 @@ bool RadioEngine::selectNextSource(int category, std::uint64_t deviceId)
     });
 }
 
-bool RadioEngine::setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId)
+bool RadioEngine::setPositions(
+    float emitterX,
+    float emitterY,
+    float emitterZ,
+    float playerX,
+    float playerY,
+    float playerZ,
+    float playerYawDeg,
+    std::uint64_t deviceId)
 {
-    return runBoolCommandForDevice(deviceId, [this, emitterX, emitterY, emitterZ, playerX, playerY, playerZ]() {
+    return runBoolCommandForDevice(deviceId, [this, emitterX, emitterY, emitterZ, playerX, playerY, playerZ, playerYawDeg]() {
         emitterPosition_ = Position{ emitterX, emitterY, emitterZ };
         playerPosition_ = Position{ playerX, playerY, playerZ };
+        playerYawDeg_ = playerYawDeg;
         updateFadeVolumeLocked();
         return true;
     });
@@ -3029,7 +3038,13 @@ void RadioEngine::updateFadeVolumeLocked()
     int rightVolume = volume;
     if (config_.enableSpatialPan && panDist > kMinimumFadeGap) {
         const double dx = static_cast<double>(emitterPosition_.x) - static_cast<double>(playerPosition_.x);
-        pan = std::clamp(dx / static_cast<double>(panDist), -1.0, 1.0);
+        const double dy = static_cast<double>(emitterPosition_.y) - static_cast<double>(playerPosition_.y);
+        const double yawRadians =
+            static_cast<double>(playerYawDeg_) * (std::acos(-1.0) / 180.0);
+        const double rightX = std::cos(yawRadians);
+        const double rightY = -std::sin(yawRadians);
+        const double localRight = (dx * rightX) + (dy * rightY);
+        pan = std::clamp(localRight / static_cast<double>(panDist), -1.0, 1.0);
 
         // Equal-power stereo pan curve for smoother perceived loudness.
         const double angle = (pan + 1.0) * (std::acos(-1.0) / 4.0);
@@ -3233,6 +3248,7 @@ RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
     snapshot.previousWasSong = previousWasSong_;
     snapshot.emitterPosition = emitterPosition_;
     snapshot.playerPosition = playerPosition_;
+    snapshot.playerYawDeg = playerYawDeg_;
     snapshot.lastVolume = lastVolume_;
     snapshot.lastLeftVolume = lastLeftVolume_;
     snapshot.lastRightVolume = lastRightVolume_;
@@ -3256,6 +3272,7 @@ void RadioEngine::applyDeviceStateLocked(const DeviceState& state)
     previousWasSong_ = state.previousWasSong;
     emitterPosition_ = state.emitterPosition;
     playerPosition_ = state.playerPosition;
+    playerYawDeg_ = state.playerYawDeg;
     lastVolume_ = state.lastVolume;
     lastLeftVolume_ = state.lastLeftVolume;
     lastRightVolume_ = state.lastRightVolume;
@@ -3298,6 +3315,9 @@ void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         trackStartValid_ = false;
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
         syncCurrentDeviceStateLocked();
     }
 
@@ -3309,6 +3329,13 @@ void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
     if (state_ != PlaybackState::Stopped) {
         state_ = PlaybackState::Stopped;
         trackStartValid_ = false;
+    }
+
+    if (state_ == PlaybackState::Stopped) {
+        // Force the first post-switch fade sample to write volume/pan to the fresh playback session.
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
     }
 }
 

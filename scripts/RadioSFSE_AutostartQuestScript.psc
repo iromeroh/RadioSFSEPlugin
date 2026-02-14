@@ -65,5 +65,5 @@ Function PushFadeSample()
 		emitterRef = playerRef
 	endif
 
-	RadioSFSENative.set_positions( emitterRef,emitterRef.GetPositionX(),emitterRef.GetPositionY(),emitterRef.GetPositionZ(),playerRef.GetPositionX(),playerRef.GetPositionY(),	playerRef.GetPositionZ())
+	RadioSFSENative.set_positions( emitterRef,emitterRef.GetPositionX(),emitterRef.GetPositionY(),emitterRef.GetPositionZ(),playerRef.GetPositionX(),playerRef.GetPositionY(),	playerRef.GetPositionZ(), playerRef.GetAngleZ())
 EndFunction

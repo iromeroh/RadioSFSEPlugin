@@ -52,7 +52,15 @@ public:
         std::uint64_t deviceId,
         const std::function<void(bool result)>& completion = {});
 
-    bool setPositions(float emitterX, float emitterY, float emitterZ, float playerX, float playerY, float playerZ, std::uint64_t deviceId = 0);
+    bool setPositions(
+        float emitterX,
+        float emitterY,
+        float emitterZ,
+        float playerX,
+        float playerY,
+        float playerZ,
+        float playerYawDeg,
+        std::uint64_t deviceId = 0);
 
     std::string currentChannel(std::uint64_t deviceId = 0) const;
     std::string currentSourceName(std::uint64_t deviceId = 0) const;
@@ -101,10 +109,10 @@ private:
         std::string transitionPrefix{ "transition_" };
         std::string adPrefix{ "ad_" };
         std::size_t adIntervalSongs{ 3 };
-        float minFadeDistance{ 150.0F };
-        float maxFadeDistance{ 5000.0F };
+        float minFadeDistance{ 0.1F };
+        float maxFadeDistance{ 35.0F };
         bool enableSpatialPan{ true };
-        float panDistance{ 1200.0F };
+        float panDistance{ 40.0F };
         bool logFadeChanges{ false };
         bool autoRescanOnChangePlaylist{ true };
         bool loopPlaylist{ true };
@@ -148,6 +156,7 @@ private:
 
         Position emitterPosition{};
         Position playerPosition{};
+        float playerYawDeg{ 0.0F };
         int lastVolume{ -1 };
         int lastLeftVolume{ -1 };
         int lastRightVolume{ -1 };
@@ -250,6 +259,7 @@ private:
 
     Position emitterPosition_{};
     Position playerPosition_{};
+    float playerYawDeg_{ 0.0F };
     int lastVolume_{ -1 };
     int lastLeftVolume_{ -1 };
     int lastRightVolume_{ -1 };
