@@ -199,6 +199,54 @@ Bool Function IsEmitterReachableFromPlayer(ObjectReference emitterRef)
 	return reachable
 EndFunction
 
+Bool Function IsEmitterReferenceInvalid(ObjectReference emitterRef)
+	if emitterRef == None
+		return true
+	endif
+
+	Actor player = Game.GetPlayer()
+	if player != None && emitterRef == player
+		return false
+	endif
+
+	if emitterRef.IsDeleted()
+		Trace("IsEmitterReferenceInvalid: deleted emitter " + emitterRef)
+		return true
+	endif
+
+	if emitterRef.IsDestroyed()
+		Trace("IsEmitterReferenceInvalid: destroyed emitter " + emitterRef)
+		return true
+	endif
+
+	if emitterRef.IsDisabled()
+		Trace("IsEmitterReferenceInvalid: disabled emitter " + emitterRef)
+		return true
+	endif
+
+	return false
+EndFunction
+
+Function SanitizeActiveEmitter()
+	ObjectReference activeEmitter = RadioEmitter
+	if activeEmitter == None
+		return
+	endif
+
+	if !IsEmitterReferenceInvalid(activeEmitter)
+		return
+	endif
+
+	Trace("SanitizeActiveEmitter: clearing active emitter " + activeEmitter)
+	if RadioSFSENative.isPlaying(activeEmitter)
+		RadioSFSENative.stop(activeEmitter)
+	endif
+
+	RadioEmitter = None
+	lastRadioWorldspace = None
+	lastRadioCell = None
+EndFunction
+
 Function EnsureControlSlateInventory(Bool shouldHave)
 	Actor player = Game.GetPlayer()
 	if player == None
@@ -294,6 +342,8 @@ ObjectReference Function getEmitter()
 EndFunction
 
 ObjectReference Function ResolveEmitterForControls()
+	SanitizeActiveEmitter()
+
 	Actor player = Game.GetPlayer()
 	if player == None
 		return None
@@ -531,6 +581,7 @@ Event OnTimer(int aiTimerID)
         endif
 
 	RefreshControlSlateAccess()
+	SanitizeActiveEmitter()
 
 	Actor player = Game.GetPlayer()
 	ObjectReference controlsRef = ResolveEmitterForControls()

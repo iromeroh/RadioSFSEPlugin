@@ -145,4 +145,26 @@ Included:
 - `scripts/STAR_Forward_Control_Slate_Script.psc`
 - `scripts/STAR_Player_Alias_Script.psc`
 - `scripts/STAR_Radio_Message_Script.psc`
+- `scripts/STAR_Radio_Terminal_Menu_Script.psc`
 
+## Outpost Terminal Integration
+
+`STAR_Radio_Terminal_Menu_Script.psc` is intended for buildable outpost terminals that act as fixed radio emitters.
+
+- Attach the script to the relevant terminal `TerminalMenu` form(s).
+- Set `myQuest` to `STAR_Start_Quest`.
+- Set `RadioTerminalMenu_Main` to the main terminal menu handling radio actions.
+- Optionally set `RadioTerminalMenu_Submenu` when actions are in a separate submenu.
+- Default menu item IDs are aligned with the portable radio controls:
+  - `0` media type
+  - `1` next source
+  - `2` play/pause
+  - `3` forward
+  - `4` rewind
+  - `5` volume up
+  - `6` volume down
+
+Behavior highlights:
+- Entering/using the terminal promotes that terminal reference as the active radio emitter.
+- Optional stop of previous emitter prevents overlapping playback when switching from another device.
+- Worldspace/cell reachability behavior remains enforced by `STAR_Start_Quest_Script` timer updates.
