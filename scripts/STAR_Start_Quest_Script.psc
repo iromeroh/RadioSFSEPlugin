@@ -26,7 +26,7 @@ ObjectReference Property VendorChest_NeonTradeAuthority Auto
 Bool Property AutoStartPlayback = False Auto
 Bool Property UseStationStart = False Auto
 Bool Property UpdateFade = True Auto
-Float Property FadeUpdateSeconds = 0.5 Auto
+Float Property FadeUpdateSeconds = 0.25 Auto
 WorldSpace Property lastRadioWorldspace = None Auto
 Cell Property lastRadioCell = None Auto Hidden
 Bool Property RequireOwnedRadioForControls = True Auto
@@ -41,11 +41,17 @@ Bool Property HasPersistentState = False Auto Hidden
 String Property PersistentSourceName = "" Auto Hidden
 String Property PersistentTrackName = "" Auto Hidden
 Float Property PersistentVolume = 60.0 Auto Hidden
+Bool Property NotifyTrackChangesOnTimer = True Auto
+ObjectReference Property LastTrackNotifyEmitter = None Auto Hidden
+String Property LastTrackNotifiedName = "" Auto Hidden
 Bool Property UseCustomFadeParams = False Auto
 Float Property FadeMinDistance = 0.1 Auto
 Float Property FadeMaxDistance = 35.0 Auto
-Float Property FadePanDistance = 40.0 Auto
+Float Property FadePanDistance = 5.0 Auto
 Bool Property AutoDisableLegacyFadeOverride = True Auto
+Bool Property MuteCellMusicWhileRadioPlaying = True Auto
+MusicType Property MusicSilenceOverride Auto
+Bool Property MusicSilenceActive = False Auto Hidden
 
 int MyTimer = 528
 int mediaType = 1
@@ -242,9 +248,45 @@ Function SanitizeActiveEmitter()
 		RadioSFSENative.stop(activeEmitter)
 	endif
 
+	ResetTrackChangeNotification(activeEmitter)
 	RadioEmitter = None
 	lastRadioWorldspace = None
 	lastRadioCell = None
+EndFunction
+
+Function ResetTrackChangeNotification(ObjectReference emitterRef = None)
+	if emitterRef == None || LastTrackNotifyEmitter == emitterRef
+		LastTrackNotifyEmitter = None
+		LastTrackNotifiedName = ""
+	endif
+EndFunction
+
+Function NotifyTrackChangeIfNeeded(ObjectReference emitterRef)
+	if !NotifyTrackChangesOnTimer
+		return
+	endif
+	if emitterRef == None
+		return
+	endif
+
+	; Track-change notifications are only for local playlists/stations (1/2), not streams (3).
+	if mediaType != 1 && mediaType != 2
+		ResetTrackChangeNotification(emitterRef)
+		return
+	endif
+
+	String nowTrack = RadioSFSENative.currentTrackBasename(emitterRef)
+	if nowTrack == "" || nowTrack == "na"
+		return
+	endif
+
+	if LastTrackNotifyEmitter == emitterRef && LastTrackNotifiedName == nowTrack
+		return
+	endif
+
+	LastTrackNotifyEmitter = emitterRef
+	LastTrackNotifiedName = nowTrack
+	Notify("Now playing: " + nowTrack, True)
 EndFunction
 
 Function EnsureControlSlateInventory(Bool shouldHave)
@@ -423,6 +465,57 @@ Function ApplyFadeParams(ObjectReference emitterRef)
 	Trace("ApplyFadeParams: custom min=" + minDist + " max=" + maxDist + " pan=" + panDist + " emitter=" + emitterRef)
 EndFunction
 
+Function SetMusicSilenceActive(Bool shouldBeActive)
+	if MusicSilenceOverride == None
+		MusicSilenceActive = False
+		return
+	endif
+
+	if shouldBeActive
+		if !MusicSilenceActive
+			MusicSilenceOverride.Add()
+			MusicSilenceActive = True
+			Trace("Music silence override added.")
+		endif
+	else
+		if MusicSilenceActive
+			MusicSilenceOverride.Remove()
+			MusicSilenceActive = False
+			Trace("Music silence override removed.")
+		endif
+	endif
+EndFunction
+
+Function SyncCellMusicMute(ObjectReference emitterRef = None)
+	if !MuteCellMusicWhileRadioPlaying
+		SetMusicSilenceActive(False)
+		return
+	endif
+
+	if MusicSilenceOverride == None
+		return
+	endif
+
+	ObjectReference targetEmitter = emitterRef
+	if targetEmitter == None
+		targetEmitter = ResolveEmitterForControls()
+	endif
+
+	Bool shouldMute = False
+	if targetEmitter != None && RadioSFSENative.isPlaying(targetEmitter)
+		shouldMute = IsEmitterReachableFromPlayer(targetEmitter)
+	else
+		Actor playerRef = Game.GetPlayer()
+		if playerRef != None && RadioSFSENative.isPlaying(playerRef)
+			shouldMute = True
+		elseif RadioEmitter != None && RadioSFSENative.isPlaying(RadioEmitter)
+			shouldMute = IsEmitterReachableFromPlayer(RadioEmitter)
+		endif
+	endif
+
+	SetMusicSilenceActive(shouldMute)
+EndFunction
+
 Function ApplyPersistentStateToEmitter(ObjectReference emitterRef)
 	if emitterRef == None
 		return
@@ -562,6 +655,8 @@ Function InitializeRadio()
 		endif
 	endif
 
+	SyncCellMusicMute()
+
 	PushFadeSample()
 
 	if UpdateFade
@@ -600,17 +695,29 @@ Event OnTimer(int aiTimerID)
 				; World radios pause when player is not in the same worldspace/cell.
 				Trace("OnTimer: pausing unreachable emitter " + emitterRef)
 				RadioSFSENative.pause(emitterRef)
+				ResetTrackChangeNotification(emitterRef)
 			elseif emitterRef != player
 				; Keep fade updates only for in-world radios.
 				Trace("OnTimer: push fade sample for emitter " + emitterRef)
 				PushFadeSample(emitterRef)
+				NotifyTrackChangeIfNeeded(emitterRef)
+			else
+				NotifyTrackChangeIfNeeded(emitterRef)
 			endif
+		else
+			ResetTrackChangeNotification(emitterRef)
 		endif
+
+	SyncCellMusicMute()
 
 	if UpdateFade
 		; RegisterForSingleUpdate(FadeUpdateSeconds)
                 StartTimer(FadeUpdateSeconds, MyTimer)
 	endif
+EndEvent
+
+Event OnQuestShutdown()
+	SetMusicSilenceActive(False)
 EndEvent
 
 Function PushFadeSample(ObjectReference sampleEmitter = None)

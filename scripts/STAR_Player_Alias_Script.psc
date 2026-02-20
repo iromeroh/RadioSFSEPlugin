@@ -10,5 +10,6 @@ Event OnPlayerLoadGame()
         if mgr
                 mgr.RefreshControlSlateAccess()
                 mgr.RestorePersistentState()
+                mgr.SyncCellMusicMute()
         endif
 EndEvent

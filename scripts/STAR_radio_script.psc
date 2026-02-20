@@ -145,7 +145,11 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
 
         mgr.setMediaType(mediaType, emitterRef)
         String sourceName = RadioSFSENative.currentSourceName(emitterRef)
-        PlayFxIfReachable(emitterRef, "tuning_short.mp3")
+		if mediaType == 3 || mediaType == 2
+            PlayFxIfReachable(emitterRef, "tuning_short.mp3")
+		else
+		    PlayFxIfReachable(emitterRef, "notification.mp3")
+		endif
 
         if sourceName == ""
             String err0 = RadioSFSENative.lastError(emitterRef)
@@ -159,8 +163,12 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 1
-        PlayFxIfReachable(emitterRef, "tuning_short.mp3")
         int mediaType2 = mgr.getMediaType()
+		if mediaType2 == 3 || mediaType2 == 2
+		        PlayFxIfReachable(emitterRef, "tuning_short.mp3")
+        else
+		        PlayFxIfReachable(emitterRef, "notification.mp3")
+		endif
         Bool selected = RadioSFSENative.selectNextSource(emitterRef, mediaType2)
         if !selected
             String err1 = RadioSFSENative.lastError(emitterRef)
