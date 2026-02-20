@@ -2754,7 +2754,7 @@ bool RadioEngine::forwardLocked()
         return false;
     }
 
-    logger_.info("forward -> " + track->string());
+    logger_.info("forward -> " + pathToUtf8(*track));
     return playPathLocked(*track);
 }
 
@@ -2795,7 +2795,7 @@ bool RadioEngine::rewindLocked()
         return false;
     }
 
-    logger_.info("rewind -> " + track->string());
+    logger_.info("rewind -> " + pathToUtf8(*track));
     return playPathLocked(*track);
 }
 
