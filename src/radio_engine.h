@@ -43,6 +43,7 @@ public:
     bool volumeUp(float step, std::uint64_t deviceId = 0);
     bool volumeDown(float step, std::uint64_t deviceId = 0);
     float getVolume(std::uint64_t deviceId = 0) const;
+    float configuredVolumeStepPercent() const;
     bool setVolume(float volume, std::uint64_t deviceId = 0);
     std::string getTrack(std::uint64_t deviceId = 0) const;
     bool setTrack(const std::string& trackBasename, std::uint64_t deviceId = 0);
@@ -118,6 +119,7 @@ private:
         bool autoRescanOnChangePlaylist{ true };
         bool loopPlaylist{ true };
         bool verboseStreamDiagnostics{ false };
+        float volumeStepPercent{ 20.0F };
         std::vector<std::pair<std::string, std::string>> streamStations;
     };
 

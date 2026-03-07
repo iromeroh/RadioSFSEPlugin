@@ -6,7 +6,7 @@ This milestone implements:
 - Background worker thread (no periodic external tick required)
 - Directory scanner for structured playlist/station folders
 - Track sequencing with station transitions + ad insertion
-- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`
+- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`, `getVolumeStepPercent`
 - Availability probe API: `pluginAvailable` (Papyrus compatibility check)
 - Distance-based fade plus stereo spatial pan (3D-like using emitter/player coordinates)
 - Text milestone logging
@@ -61,6 +61,7 @@ Per-device control notes:
 - `setFadeParams(ref, min, max, pan)` overrides fade distances for that specific device/ref.
 - Pass any negative parameter to `setFadeParams` to reset that device to global INI defaults.
 - `volumeUp(ref, step)` / `volumeDown(ref, step)` adjust per-device gain for current session.
+- `getVolumeStepPercent(ref)` returns INI key `volume_step_percent` for Papyrus menu logic.
 
 ## Directory Model
 
@@ -101,6 +102,7 @@ Supported keys:
 - `transition_prefix`
 - `ad_prefix`
 - `ad_interval_songs`
+- `volume_step_percent`
 - `min_fade_distance`
 - `max_fade_distance`
 - `enable_spatial_pan`

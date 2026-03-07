@@ -208,6 +208,7 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "volumeUp", &PapyrusBridge::nativeVolumeUp, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeDown", &PapyrusBridge::nativeVolumeDown, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getVolume", &PapyrusBridge::nativeGetVolume, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getVolumeStepPercent", &PapyrusBridge::nativeGetVolumeStepPercent, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setVolume", &PapyrusBridge::nativeSetVolume, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getTrack", &PapyrusBridge::nativeGetTrack, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setTrack", &PapyrusBridge::nativeSetTrack, std::nullopt, false);
@@ -605,6 +606,16 @@ float PapyrusBridge::nativeGetVolume(std::monostate, RE::TESObjectREFR* activato
     }
 
     return self->engine_.getVolume(deviceKeyFromRef(activatorRef));
+}
+
+float PapyrusBridge::nativeGetVolumeStepPercent(std::monostate, RE::TESObjectREFR*)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return 20.0F;
+    }
+
+    return self->engine_.configuredVolumeStepPercent();
 }
 
 bool PapyrusBridge::nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume)

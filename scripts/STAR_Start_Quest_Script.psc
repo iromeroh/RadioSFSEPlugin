@@ -1,6 +1,7 @@
 Scriptname STAR_Start_Quest_Script extends Quest
 
 ObjectReference Property permanentRadioEmitter Auto Mandatory
+Form Property RadioItemBaseForm Auto
 ObjectReference Property RadioEmitter Auto
 String Property StartupPlaylist = "Default" Auto
 
@@ -95,6 +96,8 @@ Int Property FallbackAdIndex = 0 Auto Hidden
 Int Property FallbackSongsSinceAd = 0 Auto Hidden
 Bool Property FallbackPreviousWasSong = False Auto Hidden
 Float Property FallbackVolume = 60.0 Auto Hidden
+Form Property CachedRadioBaseForm = None Auto Hidden
+Bool Property TriedLegacyPermanentBaseResolve = False Auto Hidden
 
 int MyTimer = 528
 int mediaType = 1
@@ -484,6 +487,22 @@ Bool Function RadioSetVolume(ObjectReference emitterRef, Float volume)
 	return true
 EndFunction
 
+Float Function ResolveVolumeStepPercent(ObjectReference emitterRef, Float fallbackStep = 20.0)
+	Float resolvedStep = fallbackStep
+	if resolvedStep <= 0.0
+		resolvedStep = 20.0
+	endif
+
+	if IsSFSEAvailable(emitterRef)
+		Float nativeStep = RadioSFSENative.getVolumeStepPercent(emitterRef)
+		if nativeStep > 0.0
+			resolvedStep = nativeStep
+		endif
+	endif
+
+	return resolvedStep
+EndFunction
+
 Bool Function RadioVolumeUp(ObjectReference emitterRef, Float step)
 	if IsSFSEAvailable(emitterRef)
 		return RadioSFSENative.volumeUp(emitterRef, step)
@@ -815,10 +834,27 @@ Function ResetSFSEProbeState()
 EndFunction
 
 Form Function RadioBaseForm()
-	if permanentRadioEmitter == None
-		return None
+	if CachedRadioBaseForm != None
+		return CachedRadioBaseForm
 	endif
-	return permanentRadioEmitter.getBaseObject()
+
+	; Preferred stable source: explicit base form set in CK.
+	if RadioItemBaseForm != None
+		CachedRadioBaseForm = RadioItemBaseForm
+		return CachedRadioBaseForm
+	endif
+
+	; Legacy compatibility: try to resolve from permanent emitter only once.
+	if !TriedLegacyPermanentBaseResolve && permanentRadioEmitter != None
+		TriedLegacyPermanentBaseResolve = True
+		Form legacyBase = permanentRadioEmitter.GetBaseObject()
+		if legacyBase != None
+			CachedRadioBaseForm = legacyBase
+			return CachedRadioBaseForm
+		endif
+	endif
+
+	return None
 EndFunction
 
 int Function GetCarriedRadioCount()
@@ -1123,9 +1159,6 @@ EndFunction
 ObjectReference Function ResolveEmitterForState()
 	ObjectReference emitterRef = getEmitter()
 	if emitterRef == None
-		emitterRef = permanentRadioEmitter
-	endif
-	if emitterRef == None
 		emitterRef = Game.GetPlayer()
 	endif
 	return emitterRef
@@ -1342,9 +1375,6 @@ EndFunction
 Function InitializeRadio()
 	ObjectReference emitterRef = RadioEmitter
 
-        if ! emitterRef
-            emitterRef = permanentRadioEmitter
-        endif
 	if emitterRef == None
 		emitterRef = Game.GetPlayer()
 	endif

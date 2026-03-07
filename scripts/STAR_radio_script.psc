@@ -270,7 +270,8 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 6
-        Bool volUpOk = mgr.RadioVolumeUp(emitterRef, VolumeStep)
+        Float volumeStepNow = mgr.ResolveVolumeStepPercent(emitterRef, VolumeStep)
+        Bool volUpOk = mgr.RadioVolumeUp(emitterRef, volumeStepNow)
         if !volUpOk
             String err4 = mgr.RadioLastError(emitterRef)
             if err4 == ""
@@ -284,7 +285,8 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 7
-        Bool volDownOk = mgr.RadioVolumeDown(emitterRef, VolumeStep)
+        Float volumeStepNowDown = mgr.ResolveVolumeStepPercent(emitterRef, VolumeStep)
+        Bool volDownOk = mgr.RadioVolumeDown(emitterRef, volumeStepNowDown)
         if !volDownOk
             String err5 = mgr.RadioLastError(emitterRef)
             if err5 == ""

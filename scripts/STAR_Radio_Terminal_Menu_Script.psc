@@ -290,7 +290,8 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		mgr.CapturePersistentState(akTerminalRef)
 
 	elseif auiMenuItemID == MenuItem_VolumeUp
-		Bool volUpOk = mgr.RadioVolumeUp(akTerminalRef, VolumeStep)
+		Float volumeStepNow = mgr.ResolveVolumeStepPercent(akTerminalRef, VolumeStep)
+		Bool volUpOk = mgr.RadioVolumeUp(akTerminalRef, volumeStepNow)
 		if !volUpOk
 			String err4 = mgr.RadioLastError(akTerminalRef)
 			if err4 == ""
@@ -304,7 +305,8 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		mgr.CapturePersistentState(akTerminalRef)
 
 	elseif auiMenuItemID == MenuItem_VolumeDown
-		Bool volDownOk = mgr.RadioVolumeDown(akTerminalRef, VolumeStep)
+		Float volumeStepNowDown = mgr.ResolveVolumeStepPercent(akTerminalRef, VolumeStep)
+		Bool volDownOk = mgr.RadioVolumeDown(akTerminalRef, volumeStepNowDown)
 		if !volDownOk
 			String err5 = mgr.RadioLastError(akTerminalRef)
 			if err5 == ""

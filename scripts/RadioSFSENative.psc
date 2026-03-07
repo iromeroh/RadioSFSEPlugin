@@ -21,6 +21,7 @@ Bool Function setFadeParams(ObjectReference activatorRef, Float minDistance, Flo
 Bool Function volumeUp(ObjectReference activatorRef, Float step) Global Native
 Bool Function volumeDown(ObjectReference activatorRef, Float step) Global Native
 Float Function getVolume(ObjectReference activatorRef) Global Native
+Float Function getVolumeStepPercent(ObjectReference activatorRef) Global Native
 Bool Function setVolume(ObjectReference activatorRef, Float vol) Global Native
 String Function getTrack(ObjectReference activatorRef) Global Native
 Bool Function setTrack(ObjectReference activatorRef, String trackBasename) Global Native

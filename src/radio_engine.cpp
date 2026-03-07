@@ -1373,6 +1373,12 @@ float RadioEngine::getVolume(std::uint64_t deviceId) const
     return std::clamp(it->second.volumeGain * kDefaultVolumePercent, 0.0F, kMaximumVolumePercent);
 }
 
+float RadioEngine::configuredVolumeStepPercent() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::clamp(config_.volumeStepPercent, 0.1F, kMaximumVolumePercent);
+}
+
 bool RadioEngine::setVolume(float volume, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, volume]() {
@@ -1636,6 +1642,7 @@ bool RadioEngine::loadConfig()
 {
     config_.radioRootPath = defaultRadioRoot();
     config_.streamStations.clear();
+    config_.volumeStepPercent = 20.0F;
 
     const auto path = configPath();
     if (!std::filesystem::exists(path)) {
@@ -1700,6 +1707,8 @@ bool RadioEngine::loadConfig()
                 config_.loopPlaylist = value == "1" || toLower(value) == "true";
             } else if (key == "verbose_stream_diagnostics") {
                 config_.verboseStreamDiagnostics = value == "1" || toLower(value) == "true";
+            } else if (key == "volume_step_percent") {
+                config_.volumeStepPercent = std::stof(value);
             } else if (key == "stream_station") {
                 const auto sep = value.find('|');
                 if (sep == std::string::npos) {
@@ -1725,10 +1734,16 @@ bool RadioEngine::loadConfig()
     if (config_.panDistance < kMinimumFadeGap) {
         config_.panDistance = kMinimumFadeGap;
     }
+    if (config_.volumeStepPercent <= 0.0F) {
+        config_.volumeStepPercent = 20.0F;
+    } else if (config_.volumeStepPercent > kMaximumVolumePercent) {
+        config_.volumeStepPercent = kMaximumVolumePercent;
+    }
 
     logger_.info("Config loaded. root_path=" + pathToUtf8(config_.radioRootPath) +
                  ", spatial_pan=" + std::string(config_.enableSpatialPan ? "true" : "false") +
-                 ", pan_distance=" + std::to_string(config_.panDistance));
+                 ", pan_distance=" + std::to_string(config_.panDistance) +
+                 ", volume_step_percent=" + std::to_string(config_.volumeStepPercent));
     return true;
 }
 

@@ -10,6 +10,8 @@ ad_prefix=ad_
 
 # Station behavior.
 ad_interval_songs=3
+# Volume delta per menu press (percent points, 0-200).
+volume_step_percent=20
 
 # Logging controls (quiet by default).
 # log_level: info | warn | error
