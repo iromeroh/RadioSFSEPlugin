@@ -10,6 +10,8 @@ Function pause(ObjectReference activatorRef) Global Native
 Function stop(ObjectReference activatorRef) Global Native
 Function forward(ObjectReference activatorRef) Global Native
 Function rewind(ObjectReference activatorRef) Global Native
+Function previous(ObjectReference activatorRef) Global Native
+Bool Function pluginAvailable(ObjectReference activatorRef) Global Native
 Bool Function isPlaying(ObjectReference activatorRef) Global Native
 String Function currentSourceName(ObjectReference activatorRef) Global Native
 String Function currentTrackBasename(ObjectReference activatorRef) Global Native

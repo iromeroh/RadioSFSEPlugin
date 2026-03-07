@@ -48,6 +48,8 @@ private:
     static void nativeStop(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeForward(std::monostate, RE::TESObjectREFR* activatorRef);
     static void nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef);
+    static void nativePrevious(std::monostate, RE::TESObjectREFR* activatorRef);
+    static bool nativePluginAvailable(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeIsPlaying(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::string nativeCurrentSourceName(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::string nativeCurrentTrackBasename(std::monostate, RE::TESObjectREFR* activatorRef);

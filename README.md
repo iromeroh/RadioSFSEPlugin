@@ -7,6 +7,7 @@ This milestone implements:
 - Directory scanner for structured playlist/station folders
 - Track sequencing with station transitions + ad insertion
 - Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`
+- Availability probe API: `pluginAvailable` (Papyrus compatibility check)
 - Distance-based fade plus stereo spatial pan (3D-like using emitter/player coordinates)
 - Text milestone logging
 - CommonLibSF-based Papyrus native registration on VM availability
@@ -14,6 +15,42 @@ This milestone implements:
 
 This milestone includes Papyrus native binding through `RE::BSScript::IVirtualMachine::BindNativeMethod` and no longer depends on manual callsite/vtable hook probing.
 Playback/session state is tracked per activator reference for the current game session (not persisted across saves).
+
+## Distribution Fallback (No SFSE DLL)
+
+`STAR_Start_Quest_Script` now includes a Papyrus-only fallback path:
+- Detects native availability through `RadioSFSENative.pluginAvailable(ref)`.
+- If SFSE is not available:
+  - media type `2` (stations) plays CK-declared `WwiseEvent` tracks.
+  - media types `1` (local files) and `3` (streams) report unsupported and play static FX.
+
+Configure fallback station content in CK on quest script properties:
+- `StationAkilaSongs`, `StationAkilaJingles`, `StationAkilaAds`
+- `StationNeonSongs`, `StationNeonJingles`, `StationNeonAds`
+- `StationAtlantisSongs`, `StationAtlantisJingles`, `StationAtlantisAds`
+- `StationHopetownSongs`, `StationHopetownJingles`, `StationHopetownAds`
+- `StationParadisoSongs`, `StationParadisoJingles`, `StationParadisoAds`
+
+Optional fallback FX properties:
+- `FallbackStaticEvent`
+- `FallbackTuningShortEvent`
+- `FallbackTuningLongEvent`
+- `FallbackNotificationEvent`
+- `FallbackNoStationEvent`
+
+## User Track Converter
+
+For distribution builds with fixed CK slot names, use:
+
+- `tools/prepare_fallback_tracks.py`
+
+This script ingests user tracks from station folders and normalizes them to deterministic
+WAV slot filenames (`song_01.wav`, `jingle_01.wav`, `ad_01.wav`) under
+`Data/Sound/fx/STAR_Radio/Fallback/...`.
+
+See:
+
+- `docs/DISTRIBUTION_AUDIO_PIPELINE.md`
 
 Category values for `changeToNextSource`:
 - `1` = playlists (`Playlists/<Name>`)
@@ -101,8 +138,24 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
+### Build From WSL (tested)
+
+Known-good invocation from WSL is to run the batch file through `cmd.exe`
+from inside the plugin directory:
+
+```bash
+cd "/mnt/c/Program Files (x86)/Steam/steamapps/common/Starfield/RadioSFSEPlugin"
+cmd.exe /c build_windows.cmd
+```
+
+Notes:
+- Prefer the command above instead of passing a fully quoted Windows path to `cmd.exe /c`.
+- The full-path form is easy to over-escape in Bash and can fail with `"not recognized as an internal or external command"`.
+- Successful output produces `build-vs/Release/RadioSFSE.dll`.
+
 Copy output DLL:
-- `build/Release/RadioSFSE.dll`
+- `build-vs/Release/RadioSFSE.dll` (when using `build_windows.cmd`)
+- `build/Release/RadioSFSE.dll` (if you used the manual `-B build` example)
 to:
 - `Data/SFSE/Plugins/RadioSFSE.dll`
 

@@ -25,11 +25,11 @@ EndFunction
 Bool Function WaitForPlaybackResult(ObjectReference emitterRef, Float timeoutSeconds = 6.0, Float stepSeconds = 0.25)
     Float elapsed = 0.0
     while elapsed < timeoutSeconds
-        if RadioSFSENative.isPlaying(emitterRef)
+        if mgr.RadioIsPlaying(emitterRef)
             return true
         endif
 
-        String errTick = RadioSFSENative.lastError(emitterRef)
+        String errTick = mgr.RadioLastError(emitterRef)
         if errTick != ""
             return false
         endif
@@ -38,7 +38,7 @@ Bool Function WaitForPlaybackResult(ObjectReference emitterRef, Float timeoutSec
         elapsed += stepSeconds
     endwhile
 
-    return RadioSFSENative.isPlaying(emitterRef)
+    return mgr.RadioIsPlaying(emitterRef)
 EndFunction
 
 Event OnRead()
@@ -76,10 +76,10 @@ Event OnRead()
 
     
    int mediaType = mgr.getMediaType()
-   RadioSFSENative.playFx(emitterRef, "tuning_short")
-   Bool selected = RadioSFSENative.selectNextSource(emitterRef, mediaType)
+   mgr.RadioPlayFx(emitterRef, "tuning_short")
+   Bool selected = mgr.RadioSelectNextSource(emitterRef, mediaType)
    if !selected
-        String selErr = RadioSFSENative.lastError(emitterRef)
+        String selErr = mgr.RadioLastError(emitterRef)
         if selErr == ""
             selErr = "Could not select source for this media type."
         endif
@@ -88,19 +88,19 @@ Event OnRead()
         return
    endif
 
-   String mediaName = RadioSFSENative.currentSourceName(emitterRef)
+   String mediaName = mgr.RadioCurrentSourceName(emitterRef)
    if mediaType == 3
-        RadioSFSENative.playFx(emitterRef, "tuning_long")
+        mgr.RadioPlayFx(emitterRef, "tuning_long")
    endif
-   RadioSFSENative.play(emitterRef)
+   mgr.RadioPlay(emitterRef)
    if WaitForPlaybackResult(emitterRef)
         Notify("Now playing: "+mediaName)
    else
-        String err = RadioSFSENative.lastError(emitterRef)
+        String err = mgr.RadioLastError(emitterRef)
         if err == ""
             err = "Could not start selected source."
         endif
-        RadioSFSENative.playFx(emitterRef, "no_station")
+        mgr.RadioPlayFx(emitterRef, "no_station")
         Notify(err, true)
         Trace("play failed: " + err)
    endif

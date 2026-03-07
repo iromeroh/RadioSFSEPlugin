@@ -1064,6 +1064,14 @@ bool RadioEngine::rewind(std::uint64_t deviceId)
     });
 }
 
+bool RadioEngine::previous(std::uint64_t deviceId)
+{
+    requestPlayInterrupt(deviceId);
+    return runBoolCommandForDevice(deviceId, [this]() {
+        return previousLocked();
+    });
+}
+
 bool RadioEngine::rescanLibrary(std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this]() {
@@ -2068,6 +2076,9 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
         trackStartTime_ = std::chrono::steady_clock::now();
         trackStartValid_ = true;
         stopFxLocked();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
         updateFadeVolumeLocked();
         logger_.info("Now playing (Media Foundation fallback): " + pathToUtf8(filePath));
         return true;
@@ -2091,6 +2102,9 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
     trackStartTime_ = std::chrono::steady_clock::now();
     trackStartValid_ = true;
     stopFxLocked();
+    lastVolume_ = -1;
+    lastLeftVolume_ = -1;
+    lastRightVolume_ = -1;
     updateFadeVolumeLocked();
 
     logger_.info("Now playing: " + pathToUtf8(filePath));
@@ -2550,6 +2564,9 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
             trackStartTime_ = std::chrono::steady_clock::now();
             trackStartValid_ = true;
             stopFxLocked();
+            lastVolume_ = -1;
+            lastLeftVolume_ = -1;
+            lastRightVolume_ = -1;
             updateFadeVolumeLocked();
             if (candidate == directUrl) {
                 logger_.info("Now streaming: " + directUrl);
@@ -2572,6 +2589,9 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
             trackStartTime_ = std::chrono::steady_clock::now();
             trackStartValid_ = true;
             stopFxLocked();
+            lastVolume_ = -1;
+            lastLeftVolume_ = -1;
+            lastRightVolume_ = -1;
             updateFadeVolumeLocked();
             if (candidate == directUrl) {
                 logger_.info("Now streaming (DirectShow fallback): " + directUrl);
@@ -2796,6 +2816,35 @@ bool RadioEngine::rewindLocked()
     }
 
     logger_.info("rewind -> " + pathToUtf8(*track));
+    return playPathLocked(*track);
+}
+
+bool RadioEngine::previousLocked()
+{
+    const auto channelIt = channels_.find(selectedKey_);
+    if (channelIt != channels_.end() && channelIt->second.isStream) {
+        logger_.info("previous -> restart stream.");
+        return playStreamLocked(channelIt->second.streamUrl);
+    }
+
+    if (channelIt == channels_.end() || channelIt->second.songs.empty()) {
+        return false;
+    }
+
+    const auto songCount = channelIt->second.songs.size();
+    songIndex_ = (songIndex_ == 0) ? (songCount - 1) : (songIndex_ - 1);
+    previousWasSong_ = true;
+
+    if (mode_ == PlaybackMode::None) {
+        mode_ = channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+    }
+
+    const auto track = chooseCurrentTrackLocked();
+    if (!track.has_value()) {
+        return false;
+    }
+
+    logger_.info("previous -> " + pathToUtf8(*track));
     return playPathLocked(*track);
 }
 

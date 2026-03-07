@@ -34,6 +34,7 @@ public:
     bool stop(std::uint64_t deviceId = 0);
     bool forward(std::uint64_t deviceId = 0);
     bool rewind(std::uint64_t deviceId = 0);
+    bool previous(std::uint64_t deviceId = 0);
     bool rescanLibrary(std::uint64_t deviceId = 0);
     bool isPlaying(std::uint64_t deviceId = 0) const;
     bool changeToNextSource(int category, std::uint64_t deviceId = 0);
@@ -200,6 +201,7 @@ private:
     bool pauseLocked();
     bool forwardLocked();
     bool rewindLocked();
+    bool previousLocked();
     bool updateTrackLocked(bool force);
     bool isTrackCompleteLocked();
     std::optional<std::filesystem::path> chooseCurrentTrackLocked() const;

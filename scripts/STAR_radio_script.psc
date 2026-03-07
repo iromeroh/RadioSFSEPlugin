@@ -52,17 +52,17 @@ Bool Function PlayFxIfReachable(ObjectReference emitterRef, String fxBasename)
 	if !IsRadioReachableForFx(emitterRef)
 		return false
 	endif
-	return RadioSFSENative.playFx(emitterRef, fxBasename)
+	return mgr.RadioPlayFx(emitterRef, fxBasename)
 EndFunction
 
 Bool Function WaitForPlaybackResult(ObjectReference emitterRef, Float timeoutSeconds = 6.0, Float stepSeconds = 0.25)
 	Float elapsed = 0.0
 	while elapsed < timeoutSeconds
-		if RadioSFSENative.isPlaying(emitterRef)
+		if mgr.RadioIsPlaying(emitterRef)
 			return true
 		endif
 
-		String errTick = RadioSFSENative.lastError(emitterRef)
+		String errTick = mgr.RadioLastError(emitterRef)
 		if errTick != ""
 			return false
 		endif
@@ -71,7 +71,7 @@ Bool Function WaitForPlaybackResult(ObjectReference emitterRef, Float timeoutSec
 		elapsed += stepSeconds
 	endwhile
 
-	return RadioSFSENative.isPlaying(emitterRef)
+	return mgr.RadioIsPlaying(emitterRef)
 EndFunction
 
 Event OnInit()
@@ -80,7 +80,7 @@ Event OnInit()
 EndEvent
 
 Event OnLoad()
-	; Keep default pickup blocked; explicit option 6 performs default processing.
+	; Keep default pickup blocked; explicit option 8 performs default processing.
 	BlockActivation(true)
 EndEvent
 
@@ -129,9 +129,9 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         return false
     endif
 
-    ; 0-type, 1-playlist, 2-play/stop, 3-forward, 4-vol+, 5-vol-, 6-take
+    ; 0-type, 1-playlist, 2-play/stop, 3-forward, 4-rewind, 5-previous, 6-vol+, 7-vol-, 8-take
     int buttonID = MyMenuMessage.Show()
-    if emitterRef != mgr.getEmitter() && buttonID != 6 && !RadioSFSENative.isPlaying(emitterRef)
+    if emitterRef != mgr.getEmitter() && buttonID != 8 && !mgr.RadioIsPlaying(emitterRef)
         mgr.ApplyPersistentStateToEmitter(emitterRef)
     endif
 
@@ -144,7 +144,7 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         endif
 
         mgr.setMediaType(mediaType, emitterRef)
-        String sourceName = RadioSFSENative.currentSourceName(emitterRef)
+        String sourceName = mgr.RadioCurrentSourceName(emitterRef)
 		if mediaType == 3 || mediaType == 2
             PlayFxIfReachable(emitterRef, "tuning_short.mp3")
 		else
@@ -152,7 +152,7 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
 		endif
 
         if sourceName == ""
-            String err0 = RadioSFSENative.lastError(emitterRef)
+            String err0 = mgr.RadioLastError(emitterRef)
             if err0 == ""
                 err0 = "Could not change media type."
             endif
@@ -169,23 +169,23 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         else
 		        PlayFxIfReachable(emitterRef, "notification.mp3")
 		endif
-        Bool selected = RadioSFSENative.selectNextSource(emitterRef, mediaType2)
+        Bool selected = mgr.RadioSelectNextSource(emitterRef, mediaType2)
         if !selected
-            String err1 = RadioSFSENative.lastError(emitterRef)
+            String err1 = mgr.RadioLastError(emitterRef)
             if err1 == ""
                 err1 = "Could not change playlist/source."
             endif
             Notify(err1, true)
         else
-            String sourceName2 = RadioSFSENative.currentSourceName(emitterRef)
+            String sourceName2 = mgr.RadioCurrentSourceName(emitterRef)
             Notify("Selected: "+sourceName2, True)
         endif
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 2
-        if RadioSFSENative.isPlaying(emitterRef)
-            RadioSFSENative.pause(emitterRef)
-            String err2p = RadioSFSENative.lastError(emitterRef)
+        if mgr.RadioIsPlaying(emitterRef)
+            mgr.RadioPause(emitterRef)
+            String err2p = mgr.RadioLastError(emitterRef)
             if err2p != ""
                 Notify(err2p, true)
             else
@@ -195,15 +195,15 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
             if mgr.getMediaType() == 3
                 PlayFxIfReachable(emitterRef, "tuning_long.mp3")
             endif
-            RadioSFSENative.play(emitterRef)
+            mgr.RadioPlay(emitterRef)
             if WaitForPlaybackResult(emitterRef)
-                String nowName = RadioSFSENative.currentTrackBasename(emitterRef)
+                String nowName = mgr.RadioCurrentTrackBasename(emitterRef)
                 if nowName == ""
-                    nowName = RadioSFSENative.currentSourceName(emitterRef)
+                    nowName = mgr.RadioCurrentSourceName(emitterRef)
                 endif
                 Notify("Now playing: "+nowName, True)
             else
-                String err2 = RadioSFSENative.lastError(emitterRef)
+                String err2 = mgr.RadioLastError(emitterRef)
                 if err2 == ""
                     err2 = "Could not start playback."
                 endif
@@ -214,53 +214,90 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 3
-        RadioSFSENative.forward(emitterRef)
-        String err3 = RadioSFSENative.lastError(emitterRef)
-        if err3 != "" && !RadioSFSENative.isPlaying(emitterRef)
+        mgr.RadioForward(emitterRef)
+        String err3 = mgr.RadioLastError(emitterRef)
+        if err3 != "" && !mgr.RadioIsPlaying(emitterRef)
             Utility.Wait(0.3)
-            RadioSFSENative.forward(emitterRef)
-            err3 = RadioSFSENative.lastError(emitterRef)
+            mgr.RadioForward(emitterRef)
+            err3 = mgr.RadioLastError(emitterRef)
         endif
         if err3 != ""
             Notify(err3, true)
         else
-            String nextName = RadioSFSENative.currentTrackBasename(emitterRef)
+            String nextName = mgr.RadioCurrentTrackBasename(emitterRef)
             if nextName == ""
-                nextName = RadioSFSENative.currentSourceName(emitterRef)
+                nextName = mgr.RadioCurrentSourceName(emitterRef)
             endif
             Notify("Now playing: "+nextName, True)
         endif
         mgr.CapturePersistentState(emitterRef)
 
     elseif buttonID == 4
-        Bool volUpOk = RadioSFSENative.volumeUp(emitterRef, VolumeStep)
+        mgr.RadioRewind(emitterRef)
+        String errRewind = mgr.RadioLastError(emitterRef)
+        if errRewind != "" && !mgr.RadioIsPlaying(emitterRef)
+            Utility.Wait(0.3)
+            mgr.RadioRewind(emitterRef)
+            errRewind = mgr.RadioLastError(emitterRef)
+        endif
+        if errRewind != ""
+            Notify(errRewind, true)
+        else
+            String rewindName = mgr.RadioCurrentTrackBasename(emitterRef)
+            if rewindName == ""
+                rewindName = mgr.RadioCurrentSourceName(emitterRef)
+            endif
+            Notify("Now playing: "+rewindName, True)
+        endif
+        mgr.CapturePersistentState(emitterRef)
+
+    elseif buttonID == 5
+        Bool prevOk = mgr.RadioPrevious(emitterRef)
+        if !prevOk
+            String errPrev = mgr.RadioLastError(emitterRef)
+            if errPrev == ""
+                errPrev = "Could not go to previous track."
+            endif
+            Notify(errPrev, true)
+        else
+            Utility.Wait(0.1)
+            String prevName = mgr.RadioCurrentTrackBasename(emitterRef)
+            if prevName == ""
+                prevName = mgr.RadioCurrentSourceName(emitterRef)
+            endif
+            Notify("Now playing: "+prevName, True)
+        endif
+        mgr.CapturePersistentState(emitterRef)
+
+    elseif buttonID == 6
+        Bool volUpOk = mgr.RadioVolumeUp(emitterRef, VolumeStep)
         if !volUpOk
-            String err4 = RadioSFSENative.lastError(emitterRef)
+            String err4 = mgr.RadioLastError(emitterRef)
             if err4 == ""
                 err4 = "Could not increase volume."
             endif
             Notify(err4, true)
         else
-            Float volUp = RadioSFSENative.getVolume(emitterRef)
+            Float volUp = mgr.RadioGetVolume(emitterRef)
             Notify("Volume: "+volUp, True)
         endif
         mgr.CapturePersistentState(emitterRef)
 
-    elseif buttonID == 5
-        Bool volDownOk = RadioSFSENative.volumeDown(emitterRef, VolumeStep)
+    elseif buttonID == 7
+        Bool volDownOk = mgr.RadioVolumeDown(emitterRef, VolumeStep)
         if !volDownOk
-            String err5 = RadioSFSENative.lastError(emitterRef)
+            String err5 = mgr.RadioLastError(emitterRef)
             if err5 == ""
                 err5 = "Could not decrease volume."
             endif
             Notify(err5, true)
         else
-            Float volDown = RadioSFSENative.getVolume(emitterRef)
+            Float volDown = mgr.RadioGetVolume(emitterRef)
             Notify("Volume: "+volDown, True)
         endif
         mgr.CapturePersistentState(emitterRef)
 
-    elseif buttonID == 6
+    elseif buttonID == 8
         ; Explicit pickup path only.
         Notify("Taking radio into inventory.")
         self.Activate(Game.GetPlayer(), true)
@@ -322,7 +359,7 @@ Event OnContainerChanged(ObjectReference akNewContainer, ObjectReference akOldCo
 	if currentEmitter != None && currentEmitter != targetEmitter
 		Trace("OnContainerChanged: stopping previous emitter " + currentEmitter)
 		mgr.CapturePersistentState(currentEmitter)
-		RadioSFSENative.stop(currentEmitter)
+		mgr.RadioStop(currentEmitter)
 	endif
 
 	if targetEmitter == None

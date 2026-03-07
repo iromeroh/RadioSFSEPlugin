@@ -6,8 +6,9 @@ EndFunction
 
 Event OnPlayerLoadGame()
         STAR_Start_Quest_Script mgr = GetMgr()
-        mgr.Notify("Game loaded", True)
         if mgr
+                mgr.ResetSFSEProbeState()
+                mgr.Notify("Game loaded", True)
                 mgr.RefreshControlSlateAccess()
                 mgr.RestorePersistentState()
                 mgr.SyncCellMusicMute()

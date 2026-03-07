@@ -25,7 +25,7 @@ std::string buildFailureMessage(
     const std::string& commandName,
     const std::string& detail = {})
 {
-    if (commandName == "play" || commandName == "start" || commandName == "forward" || commandName == "rewind") {
+    if (commandName == "play" || commandName == "start" || commandName == "forward" || commandName == "rewind" || commandName == "previous") {
         const std::string track = engine.getTrack(deviceId);
         const std::string source = engine.currentSourceName(deviceId);
         if (track == "na") {
@@ -197,6 +197,8 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "stop", &PapyrusBridge::nativeStop, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "forward", &PapyrusBridge::nativeForward, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "rewind", &PapyrusBridge::nativeRewind, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "previous", &PapyrusBridge::nativePrevious, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "pluginAvailable", &PapyrusBridge::nativePluginAvailable, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "isPlaying", &PapyrusBridge::nativeIsPlaying, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "currentSourceName", &PapyrusBridge::nativeCurrentSourceName, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "currentTrackBasename", &PapyrusBridge::nativeCurrentTrackBasename, std::nullopt, false);
@@ -427,6 +429,32 @@ void PapyrusBridge::nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef
         return;
     }
     self->clearLastError(deviceId);
+}
+
+void PapyrusBridge::nativePrevious(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return;
+    }
+
+    if (!self->shouldAcceptCommand("previous", activatorRef)) {
+        return;
+    }
+
+    const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
+    if (!self->engine_.previous(deviceId)) {
+        const std::string message = buildFailureMessage(self->engine_, deviceId, "previous");
+        self->setLastError(deviceId, message);
+        self->logger_.warn("Papyrus previous failed. " + message);
+        return;
+    }
+    self->clearLastError(deviceId);
+}
+
+bool PapyrusBridge::nativePluginAvailable(std::monostate, RE::TESObjectREFR*)
+{
+    return true;
 }
 
 bool PapyrusBridge::nativeIsPlaying(std::monostate, RE::TESObjectREFR* activatorRef)

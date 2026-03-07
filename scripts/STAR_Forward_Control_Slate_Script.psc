@@ -55,22 +55,22 @@ Event OnRead()
         Notify("Radio is nearby.")
     endif
 
-    if RadioSFSENative.isPlaying(emitterRef)
+    if mgr.RadioIsPlaying(emitterRef)
 
         ; Debug.Notification("Forward.")
 
         Trace("Forward playback.")
-        RadioSFSENative.forward(emitterRef)
-        String err = RadioSFSENative.lastError(emitterRef)
-        if err != "" && !RadioSFSENative.isPlaying(emitterRef)
+        mgr.RadioForward(emitterRef)
+        String err = mgr.RadioLastError(emitterRef)
+        if err != "" && !mgr.RadioIsPlaying(emitterRef)
             Utility.Wait(0.3)
-            RadioSFSENative.forward(emitterRef)
-            err = RadioSFSENative.lastError(emitterRef)
+            mgr.RadioForward(emitterRef)
+            err = mgr.RadioLastError(emitterRef)
         endif
-        if RadioSFSENative.isPlaying(emitterRef)
-            String mediaName = RadioSFSENative.currentTrackBasename(emitterRef)
+        if mgr.RadioIsPlaying(emitterRef)
+            String mediaName = mgr.RadioCurrentTrackBasename(emitterRef)
             if mediaName == ""
-                mediaName = RadioSFSENative.currentSourceName(emitterRef)
+                mediaName = mgr.RadioCurrentSourceName(emitterRef)
             endif
             Notify("Now playing: "+mediaName)
         else

@@ -67,7 +67,7 @@ Event OnRead()
 
     Notify("Setting media type to: "+mediaType)
 
-    String mediaName = RadioSFSENative.currentSourceName(emitterRef)
+    String mediaName = mgr.RadioCurrentSourceName(emitterRef)
     Notify("Selected media: "+mediaName)
     Notify("Press Play to start.")
 
