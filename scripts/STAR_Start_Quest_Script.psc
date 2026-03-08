@@ -84,6 +84,7 @@ FormList Property StationParadisoAds Auto
 Bool Property SFSEProbeDone = False Auto Hidden
 Bool Property SFSEAvailable = False Auto Hidden
 Bool Property SFSEMissingNoticeShown = False Auto Hidden
+Int Property DebugVerbosityLevel = 0 Auto Hidden
 String Property CompatLastError = "" Auto Hidden
 Bool Property FallbackIsPlayingState = False Auto Hidden
 Int Property FallbackCurrentInstanceId = 0 Auto Hidden
@@ -786,12 +787,19 @@ Function Trace(String text)
 EndFunction
 
 Function EnsureDiagnosticsEnabled()
-	if VerboseTraceLogs
-		return
+	Int verbosity = 0
+	if IsSFSEAvailable(RadioEmitter)
+		verbosity = RadioSFSENative.getDebugVerbosity(RadioEmitter)
 	endif
 
-	VerboseTraceLogs = True
-	Debug.Trace("STAR_Radio: VerboseTraceLogs enabled for diagnostics.")
+	if verbosity < 0
+		verbosity = 0
+	elseif verbosity > 2
+		verbosity = 2
+	endif
+
+	DebugVerbosityLevel = verbosity
+	VerboseTraceLogs = verbosity > 0
 EndFunction
 
 Function NormalizeFadeConfig()
@@ -814,7 +822,6 @@ EndFunction
 
 Event OnInit()
 	ResetSFSEProbeState()
-	EnsureDiagnosticsEnabled()
 	RefreshControlSlateAccess()
 	SeedVendorStock()
 
@@ -830,6 +837,7 @@ Function ResetSFSEProbeState()
 	if !IsSFSEAvailable(RadioEmitter)
 		mediaType = 2
 	endif
+	EnsureDiagnosticsEnabled()
 	SetFallbackStationIndex(FallbackStationIndex)
 EndFunction
 
@@ -1407,7 +1415,6 @@ EndFunction
 
 Event OnTimer(int aiTimerID)
         ; Debug.Notification("OnTimer().")
-        EnsureDiagnosticsEnabled()
         Trace("OnTimer().")
 
         if aiTimerID != MyTimer

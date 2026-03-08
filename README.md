@@ -6,7 +6,7 @@ This milestone implements:
 - Background worker thread (no periodic external tick required)
 - Directory scanner for structured playlist/station folders
 - Track sequencing with station transitions + ad insertion
-- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`, `getVolumeStepPercent`
+- Runtime control API: `change_playlist`, `play`, `start`, `pause`, `stop`, `forward`, `rewind`, `isPlaying`, `changeToNextSource`, `currentSourceName`, `currentTrackBasename`, `setFadeParams`, `volumeUp`, `volumeDown`, `getVolumeStepPercent`, `getDebugVerbosity`
 - Availability probe API: `pluginAvailable` (Papyrus compatibility check)
 - Distance-based fade plus stereo spatial pan (3D-like using emitter/player coordinates)
 - Text milestone logging
@@ -62,6 +62,7 @@ Per-device control notes:
 - Pass any negative parameter to `setFadeParams` to reset that device to global INI defaults.
 - `volumeUp(ref, step)` / `volumeDown(ref, step)` adjust per-device gain for current session.
 - `getVolumeStepPercent(ref)` returns INI key `volume_step_percent` for Papyrus menu logic.
+- `getDebugVerbosity(ref)` returns INI key `debug_verbosity` so Papyrus trace logging can follow the same knob.
 
 ## Directory Model
 
@@ -103,6 +104,7 @@ Supported keys:
 - `ad_prefix`
 - `ad_interval_songs`
 - `volume_step_percent`
+- `debug_verbosity` (`0` quiet, `1` info+Papyrus trace, `2` extra diagnostics; overrides `log_level` and verbose diagnostic flags when set)
 - `min_fade_distance`
 - `max_fade_distance`
 - `enable_spatial_pan`

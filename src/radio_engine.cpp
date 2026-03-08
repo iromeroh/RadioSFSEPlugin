@@ -1379,6 +1379,12 @@ float RadioEngine::configuredVolumeStepPercent() const
     return std::clamp(config_.volumeStepPercent, 0.1F, kMaximumVolumePercent);
 }
 
+std::int32_t RadioEngine::configuredDebugVerbosity() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::clamp<std::int32_t>(config_.debugVerbosity, 0, 2);
+}
+
 bool RadioEngine::setVolume(float volume, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, volume]() {
@@ -1643,6 +1649,8 @@ bool RadioEngine::loadConfig()
     config_.radioRootPath = defaultRadioRoot();
     config_.streamStations.clear();
     config_.volumeStepPercent = 20.0F;
+    config_.debugVerbosity = 0;
+    bool debugVerbosityProvided = false;
 
     const auto path = configPath();
     if (!std::filesystem::exists(path)) {
@@ -1709,6 +1717,9 @@ bool RadioEngine::loadConfig()
                 config_.verboseStreamDiagnostics = value == "1" || toLower(value) == "true";
             } else if (key == "volume_step_percent") {
                 config_.volumeStepPercent = std::stof(value);
+            } else if (key == "debug_verbosity") {
+                config_.debugVerbosity = std::stoi(value);
+                debugVerbosityProvided = true;
             } else if (key == "stream_station") {
                 const auto sep = value.find('|');
                 if (sep == std::string::npos) {
@@ -1739,11 +1750,37 @@ bool RadioEngine::loadConfig()
     } else if (config_.volumeStepPercent > kMaximumVolumePercent) {
         config_.volumeStepPercent = kMaximumVolumePercent;
     }
+    config_.debugVerbosity = std::clamp<std::int32_t>(config_.debugVerbosity, 0, 2);
+
+    if (debugVerbosityProvided) {
+        if (config_.debugVerbosity <= 0) {
+            logger_.setLevel(Logger::Level::Warn);
+            config_.verboseStreamDiagnostics = false;
+            config_.logFadeChanges = false;
+        } else if (config_.debugVerbosity == 1) {
+            logger_.setLevel(Logger::Level::Info);
+            config_.verboseStreamDiagnostics = false;
+            config_.logFadeChanges = false;
+        } else {
+            logger_.setLevel(Logger::Level::Info);
+            config_.verboseStreamDiagnostics = true;
+            config_.logFadeChanges = true;
+        }
+    } else {
+        if (config_.verboseStreamDiagnostics || config_.logFadeChanges) {
+            config_.debugVerbosity = 2;
+        } else if (logger_.level() == Logger::Level::Info) {
+            config_.debugVerbosity = 1;
+        } else {
+            config_.debugVerbosity = 0;
+        }
+    }
 
     logger_.info("Config loaded. root_path=" + pathToUtf8(config_.radioRootPath) +
                  ", spatial_pan=" + std::string(config_.enableSpatialPan ? "true" : "false") +
                  ", pan_distance=" + std::to_string(config_.panDistance) +
-                 ", volume_step_percent=" + std::to_string(config_.volumeStepPercent));
+                 ", volume_step_percent=" + std::to_string(config_.volumeStepPercent) +
+                 ", debug_verbosity=" + std::to_string(config_.debugVerbosity));
     return true;
 }
 

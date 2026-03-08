@@ -2,7 +2,7 @@
 # Expected layout:
 #   %root_path%\Playlists\<PlaylistName>\*.mp3
 #   %root_path%\Stations\<StationName>\*.mp3
-root_path=%USERPROFILE%\OneDrive\Documentos\My Games\Starfield\Data\Radio
+root_path=%USERPROFILE%\OneDrive\Documents\My Games\Starfield\Data\Radio
 
 # Station special-file prefixes.
 transition_prefix=transition_
@@ -15,6 +15,12 @@ volume_step_percent=20
 
 # Logging controls (quiet by default).
 # log_level: info | warn | error
+# debug_verbosity:
+#   0 = warnings/errors only (default)
+#   1 = plugin info logs + Papyrus trace logs
+#   2 = level 1 + extra stream/fade diagnostics
+# When set, this knob takes precedence over log_level/verbose_* diagnostics flags.
+debug_verbosity=0
 log_level=warn
 # When true, logs every stream backend attempt/failure detail.
 verbose_stream_diagnostics=false

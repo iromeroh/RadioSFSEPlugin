@@ -27,7 +27,6 @@ Event OnRead()
     mgr = myQuest as STAR_Start_Quest_Script
     if !mgr
         Notify("Quest script missing.", true)
-        Debug.Trace("STAR_Media_Type_Control_Slate: STAR_Start_Quest_Script missing on quest" + myQuest)
         return
     endif
 
