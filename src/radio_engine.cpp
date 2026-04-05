@@ -11,7 +11,9 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <regex>
+#include <sstream>
 
 #include <windows.h>
 #include <dshow.h>
@@ -19,6 +21,7 @@
 #include <mferror.h>
 #include <mfplay.h>
 #include <mmsystem.h>
+#include <propvarutil.h>
 #include <wininet.h>
 #include <wrl/client.h>
 
@@ -37,6 +40,16 @@ constexpr DWORD kResolverTimeoutMs = 3500;
 constexpr auto kCommandWaitTimeout = std::chrono::milliseconds(5000);
 constexpr auto kStreamStartWaitTimeout = std::chrono::milliseconds(10000);
 constexpr auto kStreamStartPoll = std::chrono::milliseconds(50);
+constexpr auto kSessionFlushInterval = std::chrono::seconds(1);
+constexpr std::uint64_t kPortableDeviceId = 0x14;
+constexpr std::uint64_t kResumeSeekMinimumMs = 250;
+constexpr char kSessionFileName[] = "RadioSFSE.session.json";
+
+std::mt19937_64& shuffleRng()
+{
+    static std::mt19937_64 engine{ std::random_device{}() };
+    return engine;
+}
 
 std::string toLowerCopy(std::string value)
 {
@@ -59,6 +72,93 @@ std::string trimAsciiCopy(const std::string& value)
     }
 
     return value.substr(start, end - start);
+}
+
+std::string jsonEscape(const std::string& value)
+{
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (const unsigned char c : value) {
+        switch (c) {
+        case '\\':
+            out += "\\\\";
+            break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\b':
+            out += "\\b";
+            break;
+        case '\f':
+            out += "\\f";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            if (c < 0x20) {
+                char buffer[7]{};
+                std::snprintf(buffer, sizeof(buffer), "\\u%04X", static_cast<unsigned int>(c));
+                out += buffer;
+            } else {
+                out.push_back(static_cast<char>(c));
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+std::string jsonUnescape(const std::string& value)
+{
+    std::string out;
+    out.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const char c = value[i];
+        if (c != '\\' || (i + 1) >= value.size()) {
+            out.push_back(c);
+            continue;
+        }
+
+        const char next = value[++i];
+        switch (next) {
+        case '\\':
+        case '"':
+        case '/':
+            out.push_back(next);
+            break;
+        case 'b':
+            out.push_back('\b');
+            break;
+        case 'f':
+            out.push_back('\f');
+            break;
+        case 'n':
+            out.push_back('\n');
+            break;
+        case 'r':
+            out.push_back('\r');
+            break;
+        case 't':
+            out.push_back('\t');
+            break;
+        case 'u':
+            if (i + 4 < value.size()) {
+                i += 4;
+            }
+            break;
+        default:
+            out.push_back(next);
+            break;
+        }
+    }
+    return out;
 }
 
 std::string replaceAll(std::string value, const std::string& needle, const std::string& replacement)
@@ -826,6 +926,290 @@ std::filesystem::path expandWindowsEnvironmentVariables(const std::string& text)
 
     return std::filesystem::path(wide);
 }
+
+std::optional<std::string> jsonFieldString(const std::string& object, const char* fieldName)
+{
+    if (fieldName == nullptr || *fieldName == '\0') {
+        return std::nullopt;
+    }
+
+    const std::string pattern = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPos = object.find(pattern);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colonPos = object.find(':', keyPos + pattern.size());
+    if (colonPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t cursor = colonPos + 1;
+    while (cursor < object.size() && std::isspace(static_cast<unsigned char>(object[cursor])) != 0) {
+        ++cursor;
+    }
+    if (cursor >= object.size() || object[cursor] != '"') {
+        return std::nullopt;
+    }
+    ++cursor;
+
+    std::string value;
+    bool escaping = false;
+    while (cursor < object.size()) {
+        const char c = object[cursor++];
+        if (escaping) {
+            value.push_back(c);
+            escaping = false;
+            continue;
+        }
+        if (c == '\\') {
+            value.push_back(c);
+            escaping = true;
+            continue;
+        }
+        if (c == '"') {
+            return jsonUnescape(value);
+        }
+        value.push_back(c);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<long long> jsonFieldInt(const std::string& object, const char* fieldName)
+{
+    const auto raw = jsonFieldString(object, fieldName);
+    if (raw.has_value()) {
+        try {
+            return std::stoll(*raw);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    if (fieldName == nullptr || *fieldName == '\0') {
+        return std::nullopt;
+    }
+
+    const std::string pattern = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPos = object.find(pattern);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colonPos = object.find(':', keyPos + pattern.size());
+    if (colonPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t cursor = colonPos + 1;
+    while (cursor < object.size() && std::isspace(static_cast<unsigned char>(object[cursor])) != 0) {
+        ++cursor;
+    }
+
+    std::size_t end = cursor;
+    while (end < object.size()) {
+        const char c = object[end];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+') {
+            ++end;
+            continue;
+        }
+        break;
+    }
+
+    if (end <= cursor) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::stoll(object.substr(cursor, end - cursor));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<double> jsonFieldDouble(const std::string& object, const char* fieldName)
+{
+    if (fieldName == nullptr || *fieldName == '\0') {
+        return std::nullopt;
+    }
+
+    const std::string pattern = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPos = object.find(pattern);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colonPos = object.find(':', keyPos + pattern.size());
+    if (colonPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t cursor = colonPos + 1;
+    while (cursor < object.size() && std::isspace(static_cast<unsigned char>(object[cursor])) != 0) {
+        ++cursor;
+    }
+
+    std::size_t end = cursor;
+    while (end < object.size()) {
+        const char c = object[end];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E') {
+            ++end;
+            continue;
+        }
+        break;
+    }
+
+    if (end <= cursor) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::stod(object.substr(cursor, end - cursor));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<bool> jsonFieldBool(const std::string& object, const char* fieldName)
+{
+    if (fieldName == nullptr || *fieldName == '\0') {
+        return std::nullopt;
+    }
+
+    const std::string pattern = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPos = object.find(pattern);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colonPos = object.find(':', keyPos + pattern.size());
+    if (colonPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t cursor = colonPos + 1;
+    while (cursor < object.size() && std::isspace(static_cast<unsigned char>(object[cursor])) != 0) {
+        ++cursor;
+    }
+
+    if (object.compare(cursor, 4, "true") == 0) {
+        return true;
+    }
+    if (object.compare(cursor, 5, "false") == 0) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+std::vector<std::size_t> jsonFieldIndexArray(const std::string& object, const char* fieldName)
+{
+    std::vector<std::size_t> out;
+    if (fieldName == nullptr || *fieldName == '\0') {
+        return out;
+    }
+
+    const std::string pattern = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPos = object.find(pattern);
+    if (keyPos == std::string::npos) {
+        return out;
+    }
+
+    const std::size_t colonPos = object.find(':', keyPos + pattern.size());
+    if (colonPos == std::string::npos) {
+        return out;
+    }
+
+    const std::size_t openPos = object.find('[', colonPos + 1);
+    const std::size_t closePos = object.find(']', openPos == std::string::npos ? colonPos + 1 : openPos + 1);
+    if (openPos == std::string::npos || closePos == std::string::npos || closePos <= openPos) {
+        return out;
+    }
+
+    std::stringstream stream(object.substr(openPos + 1, closePos - openPos - 1));
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        token = trimAsciiCopy(token);
+        if (token.empty()) {
+            continue;
+        }
+
+        try {
+            const long long value = std::stoll(token);
+            if (value >= 0) {
+                out.push_back(static_cast<std::size_t>(value));
+            }
+        } catch (...) {
+        }
+    }
+
+    return out;
+}
+
+std::vector<std::string> jsonObjectArrayEntries(const std::string& text, const char* arrayFieldName)
+{
+    std::vector<std::string> out;
+    if (arrayFieldName == nullptr || *arrayFieldName == '\0') {
+        return out;
+    }
+
+    const std::string pattern = "\"" + std::string(arrayFieldName) + "\"";
+    const std::size_t keyPos = text.find(pattern);
+    if (keyPos == std::string::npos) {
+        return out;
+    }
+
+    const std::size_t arrayOpen = text.find('[', keyPos + pattern.size());
+    if (arrayOpen == std::string::npos) {
+        return out;
+    }
+
+    std::size_t depth = 0;
+    std::size_t objectStart = std::string::npos;
+    bool inString = false;
+    bool escaping = false;
+    for (std::size_t i = arrayOpen + 1; i < text.size(); ++i) {
+        const char c = text[i];
+        if (inString) {
+            if (escaping) {
+                escaping = false;
+            } else if (c == '\\') {
+                escaping = true;
+            } else if (c == '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (c == '"') {
+            inString = true;
+            continue;
+        }
+        if (c == '{') {
+            if (depth == 0) {
+                objectStart = i;
+            }
+            ++depth;
+            continue;
+        }
+        if (c == '}') {
+            if (depth == 0) {
+                continue;
+            }
+            --depth;
+            if (depth == 0 && objectStart != std::string::npos) {
+                out.emplace_back(text.substr(objectStart, i - objectStart + 1));
+                objectStart = std::string::npos;
+            }
+            continue;
+        }
+        if (c == ']' && depth == 0) {
+            break;
+        }
+    }
+
+    return out;
+}
 }
 
 struct RadioEngine::MfState
@@ -876,9 +1260,54 @@ bool RadioEngine::initialize()
         logger_.info("[M3] Background worker started.");
     }
 
+    loadPersistentSessionLocked();
     syncCurrentDeviceStateLocked();
 
     return true;
+}
+
+void RadioEngine::savePersistentSession()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    (void)savePersistentSessionLocked();
+}
+
+void RadioEngine::reloadPersistentSession()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    stopPlaybackDeviceLocked(true);
+    stopFxLocked();
+    shutdownDirectShowLocked();
+    shutdownMediaFoundationLocked();
+
+    deviceStates_.clear();
+    currentDeviceId_ = 0;
+    backend_ = PlaybackBackend::None;
+    mediaType_ = 1;
+    selectedKey_.clear();
+    mode_ = PlaybackMode::None;
+    state_ = PlaybackState::Stopped;
+    trackOrderMode_ = TrackOrderMode::Alphabetical;
+    currentTrackPath_.clear();
+    resumePositionMs_ = 0;
+    songIndex_ = 0;
+    transitionIndex_ = 0;
+    adIndex_ = 0;
+    songsSinceAd_ = 0;
+    previousWasSong_ = false;
+    shuffleHistory_.clear();
+    shuffleCursor_ = 0;
+    lastVolume_ = -1;
+    lastLeftVolume_ = -1;
+    lastRightVolume_ = -1;
+    panControlsAvailable_ = true;
+    panUnavailableLogged_ = false;
+    trackStartValid_ = false;
+    streamWrapperTempPath_.clear();
+
+    loadPersistentSessionLocked();
+    syncCurrentDeviceStateLocked();
 }
 
 void RadioEngine::shutdown()
@@ -940,14 +1369,17 @@ bool RadioEngine::changePlaylist(const std::string& channelName, std::uint64_t d
             return false;
         }
 
+        mediaType_ = channel->isStream ? 3 : (channel->type == ChannelType::Station ? 2 : 1);
         selectedKey_ = channel->key;
         mode_ = PlaybackMode::None;
         state_ = PlaybackState::Stopped;
+        resumePositionMs_ = 0;
         songIndex_ = 0;
         transitionIndex_ = 0;
         adIndex_ = 0;
         songsSinceAd_ = 0;
         previousWasSong_ = false;
+        resetShuffleHistoryLocked();
         currentTrackPath_.clear();
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
@@ -1030,11 +1462,13 @@ bool RadioEngine::stop(std::uint64_t deviceId)
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         mode_ = PlaybackMode::None;
+        resumePositionMs_ = 0;
         songIndex_ = 0;
         transitionIndex_ = 0;
         adIndex_ = 0;
         songsSinceAd_ = 0;
         previousWasSong_ = false;
+        resetShuffleHistoryLocked();
         currentTrackPath_.clear();
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
@@ -1156,14 +1590,17 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
             return false;
         }
 
+        mediaType_ = std::clamp(category, 1, 3);
         selectedKey_ = channelIt->first;
         mode_ = PlaybackMode::None;
         state_ = PlaybackState::Stopped;
+        resumePositionMs_ = 0;
         songIndex_ = 0;
         transitionIndex_ = 0;
         adIndex_ = 0;
         songsSinceAd_ = 0;
         previousWasSong_ = false;
+        resetShuffleHistoryLocked();
         currentTrackPath_.clear();
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
@@ -1253,14 +1690,17 @@ bool RadioEngine::selectNextSource(int category, std::uint64_t deviceId)
             return false;
         }
 
+        mediaType_ = std::clamp(category, 1, 3);
         selectedKey_ = channelIt->first;
         mode_ = PlaybackMode::None;
         state_ = PlaybackState::Stopped;
+        resumePositionMs_ = 0;
         songIndex_ = 0;
         transitionIndex_ = 0;
         adIndex_ = 0;
         songsSinceAd_ = 0;
         previousWasSong_ = false;
+        resetShuffleHistoryLocked();
         currentTrackPath_.clear();
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
@@ -1373,6 +1813,39 @@ float RadioEngine::getVolume(std::uint64_t deviceId) const
     return std::clamp(it->second.volumeGain * kDefaultVolumePercent, 0.0F, kMaximumVolumePercent);
 }
 
+std::int32_t RadioEngine::getMediaType(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (deviceId == currentDeviceId_) {
+        return std::clamp(mediaType_, 1, 3);
+    }
+
+    const auto it = deviceStates_.find(deviceId);
+    if (it == deviceStates_.end()) {
+        return 1;
+    }
+
+    return std::clamp(it->second.mediaType, 1, 3);
+}
+
+std::int32_t RadioEngine::getPlayMode(std::uint64_t deviceId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto modeValue = static_cast<std::int32_t>(TrackOrderMode::Alphabetical);
+    if (deviceId == currentDeviceId_) {
+        modeValue = static_cast<std::int32_t>(trackOrderMode_);
+    } else {
+        const auto it = deviceStates_.find(deviceId);
+        if (it != deviceStates_.end()) {
+            modeValue = static_cast<std::int32_t>(it->second.trackOrderMode);
+        }
+    }
+
+    return (modeValue == static_cast<std::int32_t>(TrackOrderMode::Shuffle))
+        ? static_cast<std::int32_t>(TrackOrderMode::Shuffle)
+        : static_cast<std::int32_t>(TrackOrderMode::Alphabetical);
+}
+
 float RadioEngine::configuredVolumeStepPercent() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1394,6 +1867,40 @@ bool RadioEngine::setVolume(float volume, std::uint64_t deviceId)
         updateFadeVolumeLocked();
         logger_.info("setVolume deviceId=" + std::to_string(currentDeviceId_) +
                      " volume=" + std::to_string(clamped));
+        return true;
+    });
+}
+
+bool RadioEngine::setPlayMode(std::int32_t playMode, std::uint64_t deviceId)
+{
+    return runBoolCommandForDevice(deviceId, [this, playMode]() {
+        const TrackOrderMode resolvedMode =
+            playMode == static_cast<std::int32_t>(TrackOrderMode::Shuffle)
+                ? TrackOrderMode::Shuffle
+                : TrackOrderMode::Alphabetical;
+
+        if (trackOrderMode_ == resolvedMode) {
+            return true;
+        }
+
+        trackOrderMode_ = resolvedMode;
+        resetShuffleHistoryLocked();
+
+        const auto channelIt = channels_.find(selectedKey_);
+        if (channelIt != channels_.end() && !channelIt->second.isStream && !currentTrackPath_.empty()) {
+            const auto currentName = toLower(pathToUtf8(currentTrackPath_.filename()));
+            for (std::size_t i = 0; i < channelIt->second.songs.size(); ++i) {
+                if (toLower(pathToUtf8(channelIt->second.songs[i].filename())) == currentName) {
+                    songIndex_ = i;
+                    shuffleHistory_.push_back(i);
+                    shuffleCursor_ = 0;
+                    break;
+                }
+            }
+        }
+
+        logger_.info("setPlayMode deviceId=" + std::to_string(currentDeviceId_) +
+                     " mode=" + std::to_string(static_cast<std::int32_t>(trackOrderMode_)));
         return true;
     });
 }
@@ -1498,8 +2005,12 @@ bool RadioEngine::setTrack(const std::string& trackBasename, std::uint64_t devic
 
         songIndex_ = foundIndex;
         currentTrackPath_ = channel.songs[foundIndex];
+        resumePositionMs_ = 0;
         mode_ = channel.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
         previousWasSong_ = true;
+        resetShuffleHistoryLocked();
+        shuffleHistory_.push_back(foundIndex);
+        shuffleCursor_ = 0;
 
         logger_.info("setTrack selected: " + pathToUtf8(currentTrackPath_.filename()) +
                      " (index=" + std::to_string(foundIndex) + ")");
@@ -2079,6 +2590,7 @@ bool RadioEngine::startCurrentLocked(PlaybackMode mode, bool resetPosition)
         transitionIndex_ = 0;
         adIndex_ = 0;
         songsSinceAd_ = 0;
+        resumePositionMs_ = 0;
     }
 
     if (mode_ == PlaybackMode::Station) {
@@ -2086,7 +2598,12 @@ bool RadioEngine::startCurrentLocked(PlaybackMode mode, bool resetPosition)
     }
 
     if (channel.isStream) {
+        resumePositionMs_ = 0;
         return playStreamLocked(channel.streamUrl);
+    }
+
+    if (!resetPosition && !currentTrackPath_.empty()) {
+        return playPathLocked(currentTrackPath_);
     }
 
     const auto track = chooseCurrentTrackLocked();
@@ -2131,13 +2648,20 @@ bool RadioEngine::playPathLocked(const std::filesystem::path& filePath)
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
         lastRightVolume_ = -1;
+        if (resumePositionMs_ >= kResumeSeekMinimumMs) {
+            (void)seekCurrentPlaybackLocked(resumePositionMs_);
+        }
         updateFadeVolumeLocked();
         logger_.info("Now playing (Media Foundation fallback): " + pathToUtf8(filePath));
         return true;
     }
 
     (void)mciCommandLocked(L"set " + std::wstring(kAlias) + L" time format milliseconds");
-    if (!mciCommandLocked(L"play " + std::wstring(kAlias))) {
+    std::wstring playCommand = L"play " + std::wstring(kAlias);
+    if (resumePositionMs_ >= kResumeSeekMinimumMs) {
+        playCommand += L" from " + std::to_wstring(resumePositionMs_);
+    }
+    if (!mciCommandLocked(playCommand)) {
         (void)mciCommandLocked(L"close " + std::wstring(kAlias));
         state_ = PlaybackState::Stopped;
         currentTrackPath_.clear();
@@ -2530,6 +3054,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         logger_.warn("Stream play failed: empty URL.");
         state_ = PlaybackState::Stopped;
         currentTrackPath_.clear();
+        resumePositionMs_ = 0;
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
         lastRightVolume_ = -1;
@@ -2541,6 +3066,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         backend_ = PlaybackBackend::None;
         state_ = PlaybackState::Stopped;
         currentTrackPath_.clear();
+        resumePositionMs_ = 0;
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
         lastRightVolume_ = -1;
@@ -2611,6 +3137,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         if (startMediaFoundationStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
             streamWrapperTempPath_.clear();
             currentTrackPath_.clear();
+            resumePositionMs_ = 0;
             backend_ = PlaybackBackend::MediaFoundationStream;
             state_ = PlaybackState::Playing;
             trackStartTime_ = std::chrono::steady_clock::now();
@@ -2636,6 +3163,7 @@ bool RadioEngine::playStreamLocked(const std::string& streamUrl)
         if (startDirectShowStreamLocked(candidate, config_.verboseStreamDiagnostics)) {
             streamWrapperTempPath_.clear();
             currentTrackPath_.clear();
+            resumePositionMs_ = 0;
             backend_ = PlaybackBackend::DirectShowStream;
             state_ = PlaybackState::Playing;
             trackStartTime_ = std::chrono::steady_clock::now();
@@ -2804,6 +3332,7 @@ bool RadioEngine::forwardLocked()
     }
 
     if (channelIt->second.isStream) {
+        resumePositionMs_ = 0;
         logger_.info("forward -> restart stream.");
         return playStreamLocked(channelIt->second.streamUrl);
     }
@@ -2812,7 +3341,14 @@ bool RadioEngine::forwardLocked()
         return false;
     }
 
-    if (mode_ == PlaybackMode::Station || channelIt->second.type == ChannelType::Station) {
+    if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+        const auto songIndex = advanceShuffleSongLocked(channelIt->second);
+        if (!songIndex.has_value()) {
+            return false;
+        }
+        songIndex_ = *songIndex;
+        previousWasSong_ = true;
+    } else if (mode_ == PlaybackMode::Station || channelIt->second.type == ChannelType::Station) {
         songIndex_ = (songIndex_ + 1) % channelIt->second.songs.size();
         previousWasSong_ = true;
         mode_ = PlaybackMode::Station;
@@ -2820,6 +3356,7 @@ bool RadioEngine::forwardLocked()
         songIndex_ = (songIndex_ + 1) % channelIt->second.songs.size();
         mode_ = PlaybackMode::Playlist;
     }
+    resumePositionMs_ = 0;
 
     const auto track = chooseCurrentTrackLocked();
     if (!track.has_value()) {
@@ -2834,6 +3371,7 @@ bool RadioEngine::rewindLocked()
 {
     const auto channelIt = channels_.find(selectedKey_);
     if (channelIt != channels_.end() && channelIt->second.isStream) {
+        resumePositionMs_ = 0;
         logger_.info("rewind -> restart stream.");
         return playStreamLocked(channelIt->second.streamUrl);
     }
@@ -2845,6 +3383,7 @@ bool RadioEngine::rewindLocked()
                 (void)mciCommandLocked(L"play " + std::wstring(kAlias));
                 state_ = PlaybackState::Playing;
             }
+            resumePositionMs_ = 0;
             logger_.info("rewind -> restart current track.");
             return true;
         }
@@ -2854,9 +3393,18 @@ bool RadioEngine::rewindLocked()
         return false;
     }
 
-    const auto songCount = channelIt->second.songs.size();
-    songIndex_ = (songIndex_ == 0) ? (songCount - 1) : (songIndex_ - 1);
+    if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+        const auto songIndex = retreatShuffleSongLocked(channelIt->second);
+        if (!songIndex.has_value()) {
+            return false;
+        }
+        songIndex_ = *songIndex;
+    } else {
+        const auto songCount = channelIt->second.songs.size();
+        songIndex_ = (songIndex_ == 0) ? (songCount - 1) : (songIndex_ - 1);
+    }
     previousWasSong_ = true;
+    resumePositionMs_ = 0;
 
     if (mode_ == PlaybackMode::None) {
         mode_ = channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
@@ -2875,6 +3423,7 @@ bool RadioEngine::previousLocked()
 {
     const auto channelIt = channels_.find(selectedKey_);
     if (channelIt != channels_.end() && channelIt->second.isStream) {
+        resumePositionMs_ = 0;
         logger_.info("previous -> restart stream.");
         return playStreamLocked(channelIt->second.streamUrl);
     }
@@ -2883,9 +3432,18 @@ bool RadioEngine::previousLocked()
         return false;
     }
 
-    const auto songCount = channelIt->second.songs.size();
-    songIndex_ = (songIndex_ == 0) ? (songCount - 1) : (songIndex_ - 1);
+    if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+        const auto songIndex = retreatShuffleSongLocked(channelIt->second);
+        if (!songIndex.has_value()) {
+            return false;
+        }
+        songIndex_ = *songIndex;
+    } else {
+        const auto songCount = channelIt->second.songs.size();
+        songIndex_ = (songIndex_ == 0) ? (songCount - 1) : (songIndex_ - 1);
+    }
     previousWasSong_ = true;
+    resumePositionMs_ = 0;
 
     if (mode_ == PlaybackMode::None) {
         mode_ = channelIt->second.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
@@ -2898,6 +3456,182 @@ bool RadioEngine::previousLocked()
 
     logger_.info("previous -> " + pathToUtf8(*track));
     return playPathLocked(*track);
+}
+
+void RadioEngine::syncResumePositionFromBackendLocked()
+{
+    if (selectedKey_.empty()) {
+        resumePositionMs_ = 0;
+        return;
+    }
+
+    const auto channelIt = channels_.find(selectedKey_);
+    if (channelIt == channels_.end() || channelIt->second.isStream) {
+        resumePositionMs_ = 0;
+        return;
+    }
+
+    resumePositionMs_ = currentPlaybackPositionMsLocked();
+}
+
+std::uint64_t RadioEngine::currentPlaybackPositionMsLocked()
+{
+    const auto channelIt = channels_.find(selectedKey_);
+    if (channelIt == channels_.end() || channelIt->second.isStream) {
+        return 0;
+    }
+
+    if (backend_ == PlaybackBackend::MCI) {
+        int positionMs = 0;
+        if (mciStatusNumberLocked(L"position", positionMs) && positionMs > 0) {
+            return static_cast<std::uint64_t>(positionMs);
+        }
+        return resumePositionMs_;
+    }
+
+    if (backend_ == PlaybackBackend::MediaFoundationStream && mfState_ && mfState_->player) {
+        PROPVARIANT position{};
+        PropVariantInit(&position);
+        const HRESULT hr = mfState_->player->GetPosition(MFP_POSITIONTYPE_100NS, &position);
+        std::uint64_t positionMs = 0;
+        if (SUCCEEDED(hr)) {
+            if (position.vt == VT_I8 && position.hVal.QuadPart > 0) {
+                positionMs = static_cast<std::uint64_t>(position.hVal.QuadPart / 10000);
+            } else if (position.vt == VT_UI8 && position.uhVal.QuadPart > 0) {
+                positionMs = static_cast<std::uint64_t>(position.uhVal.QuadPart / 10000);
+            }
+        }
+        PropVariantClear(&position);
+        return positionMs;
+    }
+
+    return resumePositionMs_;
+}
+
+bool RadioEngine::seekCurrentPlaybackLocked(const std::uint64_t positionMs)
+{
+    if (positionMs < kResumeSeekMinimumMs) {
+        return true;
+    }
+
+    if (backend_ == PlaybackBackend::MCI) {
+        return mciCommandLocked(
+            L"seek " + std::wstring(kAlias) + L" to " + std::to_wstring(positionMs));
+    }
+
+    if (backend_ == PlaybackBackend::MediaFoundationStream && mfState_ && mfState_->player) {
+        PROPVARIANT position{};
+        PropVariantInit(&position);
+        position.vt = VT_I8;
+        position.hVal.QuadPart = static_cast<LONGLONG>(positionMs) * 10000;
+        const HRESULT hr = mfState_->player->SetPosition(MFP_POSITIONTYPE_100NS, &position);
+        PropVariantClear(&position);
+        return SUCCEEDED(hr);
+    }
+
+    return false;
+}
+
+void RadioEngine::resetShuffleHistoryLocked()
+{
+    shuffleHistory_.clear();
+    shuffleCursor_ = 0;
+}
+
+std::optional<std::size_t> RadioEngine::ensureShuffleCurrentSongLocked(const ChannelEntry& channel)
+{
+    if (channel.songs.empty()) {
+        return std::nullopt;
+    }
+
+    if (!shuffleHistory_.empty() && shuffleCursor_ < shuffleHistory_.size()) {
+        const std::size_t current = shuffleHistory_[shuffleCursor_];
+        if (current < channel.songs.size()) {
+            return current;
+        }
+    }
+
+    std::size_t seedIndex = songIndex_;
+    if (seedIndex >= channel.songs.size()) {
+        std::uniform_int_distribution<std::size_t> distribution(0, channel.songs.size() - 1);
+        seedIndex = distribution(shuffleRng());
+    }
+
+    resetShuffleHistoryLocked();
+    shuffleHistory_.push_back(seedIndex);
+    shuffleCursor_ = 0;
+    return seedIndex;
+}
+
+std::optional<std::size_t> RadioEngine::advanceShuffleSongLocked(const ChannelEntry& channel)
+{
+    if (channel.songs.empty()) {
+        return std::nullopt;
+    }
+
+    const auto current = ensureShuffleCurrentSongLocked(channel);
+    if (!current.has_value()) {
+        return std::nullopt;
+    }
+
+    if ((shuffleCursor_ + 1) < shuffleHistory_.size()) {
+        ++shuffleCursor_;
+        return shuffleHistory_[shuffleCursor_];
+    }
+
+    std::vector<bool> used(channel.songs.size(), false);
+    for (const auto index : shuffleHistory_) {
+        if (index < used.size()) {
+            used[index] = true;
+        }
+    }
+
+    std::vector<std::size_t> candidates;
+    for (std::size_t i = 0; i < channel.songs.size(); ++i) {
+        if (!used[i]) {
+            candidates.push_back(i);
+        }
+    }
+
+    if (candidates.empty()) {
+        resetShuffleHistoryLocked();
+        shuffleHistory_.push_back(*current);
+        shuffleCursor_ = 0;
+        for (std::size_t i = 0; i < channel.songs.size(); ++i) {
+            if (i != *current) {
+                candidates.push_back(i);
+            }
+        }
+    }
+
+    if (candidates.empty()) {
+        return *current;
+    }
+
+    std::uniform_int_distribution<std::size_t> distribution(0, candidates.size() - 1);
+    const std::size_t nextIndex = candidates[distribution(shuffleRng())];
+    shuffleHistory_.push_back(nextIndex);
+    shuffleCursor_ = shuffleHistory_.size() - 1;
+    return nextIndex;
+}
+
+std::optional<std::size_t> RadioEngine::retreatShuffleSongLocked(const ChannelEntry& channel)
+{
+    if (channel.songs.empty()) {
+        return std::nullopt;
+    }
+
+    const auto current = ensureShuffleCurrentSongLocked(channel);
+    if (!current.has_value()) {
+        return std::nullopt;
+    }
+
+    if (shuffleCursor_ > 0) {
+        --shuffleCursor_;
+        return shuffleHistory_[shuffleCursor_];
+    }
+
+    return *current;
 }
 
 bool RadioEngine::updateTrackLocked(bool force)
@@ -2928,6 +3662,7 @@ bool RadioEngine::updateTrackLocked(bool force)
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         currentTrackPath_.clear();
+        resumePositionMs_ = 0;
         lastVolume_ = -1;
         lastLeftVolume_ = -1;
         lastRightVolume_ = -1;
@@ -2936,6 +3671,7 @@ bool RadioEngine::updateTrackLocked(bool force)
         return false;
     }
 
+    resumePositionMs_ = 0;
     return playPathLocked(*nextTrack);
 }
 
@@ -3039,6 +3775,15 @@ std::optional<std::filesystem::path> RadioEngine::chooseCurrentTrackLocked() con
         return std::nullopt;
     }
 
+    if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+        auto* self = const_cast<RadioEngine*>(this);
+        const auto songIndex = self->ensureShuffleCurrentSongLocked(channel);
+        if (!songIndex.has_value() || *songIndex >= channel.songs.size()) {
+            return std::nullopt;
+        }
+        return channel.songs[*songIndex];
+    }
+
     if (mode_ == PlaybackMode::Playlist || channel.type == ChannelType::Playlist) {
         if (songIndex_ >= channel.songs.size()) {
             if (!config_.loopPlaylist) {
@@ -3068,12 +3813,20 @@ std::optional<std::filesystem::path> RadioEngine::advanceAndChooseNextTrackLocke
     }
 
     if (mode_ == PlaybackMode::Playlist || channel.type == ChannelType::Playlist) {
-        ++songIndex_;
-        if (songIndex_ >= channel.songs.size()) {
-            if (!config_.loopPlaylist) {
+        if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+            const auto nextSong = advanceShuffleSongLocked(channel);
+            if (!nextSong.has_value()) {
                 return std::nullopt;
             }
-            songIndex_ = 0;
+            songIndex_ = *nextSong;
+        } else {
+            ++songIndex_;
+            if (songIndex_ >= channel.songs.size()) {
+                if (!config_.loopPlaylist) {
+                    return std::nullopt;
+                }
+                songIndex_ = 0;
+            }
         }
         return channel.songs[songIndex_];
     }
@@ -3098,12 +3851,28 @@ std::optional<std::filesystem::path> RadioEngine::advanceAndChooseNextTrackLocke
             return next;
         }
 
-        songIndex_ = (songIndex_ + 1) % channel.songs.size();
+        if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+            const auto nextSong = advanceShuffleSongLocked(channel);
+            if (!nextSong.has_value()) {
+                return std::nullopt;
+            }
+            songIndex_ = *nextSong;
+        } else {
+            songIndex_ = (songIndex_ + 1) % channel.songs.size();
+        }
         previousWasSong_ = true;
         return channel.songs[songIndex_];
     }
 
-    songIndex_ = (songIndex_ + 1) % channel.songs.size();
+    if (trackOrderMode_ == TrackOrderMode::Shuffle) {
+        const auto nextSong = advanceShuffleSongLocked(channel);
+        if (!nextSong.has_value()) {
+            return std::nullopt;
+        }
+        songIndex_ = *nextSong;
+    } else {
+        songIndex_ = (songIndex_ + 1) % channel.songs.size();
+    }
     previousWasSong_ = true;
     return channel.songs[songIndex_];
 }
@@ -3243,6 +4012,298 @@ double RadioEngine::distanceLocked() const
     return std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
 }
 
+std::filesystem::path RadioEngine::sessionStatePathLocked() const
+{
+    return config_.radioRootPath / kSessionFileName;
+}
+
+bool RadioEngine::loadPersistentSessionLocked()
+{
+    const auto path = sessionStatePathLocked();
+    if (!std::filesystem::exists(path)) {
+        return false;
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        logger_.warn("Could not open session file: " + pathToUtf8(path));
+        return false;
+    }
+
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    const std::string text = buffer.str();
+    if (text.empty()) {
+        return false;
+    }
+
+    std::size_t restoredCount = 0;
+    for (const auto& object : jsonObjectArrayEntries(text, "devices")) {
+        const auto rawDeviceId = jsonFieldString(object, "device_id");
+        std::uint64_t deviceId = 0;
+        try {
+            if (rawDeviceId.has_value()) {
+                deviceId = std::stoull(*rawDeviceId, nullptr, 0);
+            } else if (const auto numericId = jsonFieldInt(object, "device_id"); numericId.has_value() && *numericId >= 0) {
+                deviceId = static_cast<std::uint64_t>(*numericId);
+            }
+        } catch (...) {
+            deviceId = 0;
+        }
+
+        if (deviceId == 0) {
+            continue;
+        }
+
+        DeviceState state;
+        state.mediaType = 1;
+        if (const auto value = jsonFieldInt(object, "media_type"); value.has_value()) {
+            state.mediaType = std::clamp(static_cast<std::int32_t>(*value), 1, 3);
+        }
+
+        state.selectedKey = jsonFieldString(object, "selected_key").value_or(std::string{});
+        state.trackOrderMode =
+            jsonFieldInt(object, "play_mode").value_or(1) == static_cast<long long>(TrackOrderMode::Shuffle)
+                ? TrackOrderMode::Shuffle
+                : TrackOrderMode::Alphabetical;
+        state.resumePositionMs = 0;
+        if (const auto value = jsonFieldInt(object, "resume_position_ms"); value.has_value() && *value > 0) {
+            state.resumePositionMs = static_cast<std::uint64_t>(*value);
+        }
+
+        if (const auto value = jsonFieldInt(object, "song_index"); value.has_value() && *value >= 0) {
+            state.songIndex = static_cast<std::size_t>(*value);
+        }
+        if (const auto value = jsonFieldInt(object, "transition_index"); value.has_value() && *value >= 0) {
+            state.transitionIndex = static_cast<std::size_t>(*value);
+        }
+        if (const auto value = jsonFieldInt(object, "ad_index"); value.has_value() && *value >= 0) {
+            state.adIndex = static_cast<std::size_t>(*value);
+        }
+        if (const auto value = jsonFieldInt(object, "songs_since_ad"); value.has_value() && *value >= 0) {
+            state.songsSinceAd = static_cast<std::size_t>(*value);
+        }
+        state.previousWasSong = jsonFieldBool(object, "previous_was_song").value_or(false);
+        state.volumeGain = 1.0F;
+        if (const auto volume = jsonFieldDouble(object, "volume_percent"); volume.has_value()) {
+            state.volumeGain = std::clamp(static_cast<float>(*volume / 100.0), 0.0F, 2.0F);
+        }
+        state.shuffleHistory = jsonFieldIndexArray(object, "shuffle_history");
+        if (const auto cursor = jsonFieldInt(object, "shuffle_cursor"); cursor.has_value() && *cursor >= 0) {
+            state.shuffleCursor = static_cast<std::size_t>(*cursor);
+        }
+        state.fadeOverride.enabled = false;
+        state.panControlsAvailable = true;
+        state.panUnavailableLogged = false;
+        state.state = PlaybackState::Stopped;
+
+        const auto channelIt = channels_.find(state.selectedKey);
+        if (channelIt != channels_.end()) {
+            const auto& channel = channelIt->second;
+            state.mode = channel.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+
+            const std::string trackName = jsonFieldString(object, "current_track_name").value_or(std::string{});
+            const std::string trackKind = jsonFieldString(object, "current_track_kind").value_or(std::string{});
+            auto resolveTrack = [&channel, &trackName](const std::vector<std::filesystem::path>& paths) -> std::filesystem::path {
+                if (trackName.empty()) {
+                    return {};
+                }
+                const std::string needle = toLower(trackName);
+                for (const auto& pathEntry : paths) {
+                    if (toLower(pathToUtf8(pathEntry.filename())) == needle) {
+                        return pathEntry;
+                    }
+                }
+                return {};
+            };
+
+            if (!channel.isStream) {
+                if (trackKind == "transition") {
+                    state.currentTrackPath = resolveTrack(channel.transitions);
+                } else if (trackKind == "ad") {
+                    state.currentTrackPath = resolveTrack(channel.ads);
+                } else {
+                    state.currentTrackPath = resolveTrack(channel.songs);
+                    if (state.currentTrackPath.empty()) {
+                        state.currentTrackPath = resolveTrack(channel.transitions);
+                    }
+                    if (state.currentTrackPath.empty()) {
+                        state.currentTrackPath = resolveTrack(channel.ads);
+                    }
+                }
+
+                if (state.songIndex >= channel.songs.size()) {
+                    state.songIndex = channel.songs.empty() ? 0 : (channel.songs.size() - 1);
+                }
+
+                std::vector<std::size_t> filteredHistory;
+                filteredHistory.reserve(state.shuffleHistory.size());
+                for (const auto index : state.shuffleHistory) {
+                    if (index < channel.songs.size()) {
+                        filteredHistory.push_back(index);
+                    }
+                }
+                state.shuffleHistory = std::move(filteredHistory);
+                if (state.trackOrderMode == TrackOrderMode::Shuffle && state.shuffleHistory.empty() && !channel.songs.empty()) {
+                    state.shuffleHistory.push_back(state.songIndex);
+                }
+                if (state.shuffleCursor >= state.shuffleHistory.size()) {
+                    state.shuffleCursor = state.shuffleHistory.empty() ? 0 : (state.shuffleHistory.size() - 1);
+                }
+            }
+        } else {
+            state.selectedKey.clear();
+            state.currentTrackPath.clear();
+            state.resumePositionMs = 0;
+            state.shuffleHistory.clear();
+            state.shuffleCursor = 0;
+        }
+
+        deviceStates_[deviceId] = std::move(state);
+        ++restoredCount;
+    }
+
+    if (restoredCount > 0) {
+        logger_.info("Loaded radio session state for " + std::to_string(restoredCount) + " device(s).");
+    }
+    return restoredCount > 0;
+}
+
+bool RadioEngine::savePersistentSessionLocked()
+{
+    syncResumePositionFromBackendLocked();
+    syncCurrentDeviceStateLocked();
+
+    std::error_code ec;
+    std::filesystem::create_directories(config_.radioRootPath, ec);
+    if (ec) {
+        logger_.warn("Could not create radio session directory: " + pathToUtf8(config_.radioRootPath));
+        return false;
+    }
+
+    std::map<std::uint64_t, DeviceState> orderedStates(deviceStates_.begin(), deviceStates_.end());
+    std::ostringstream out;
+    out << "{\n  \"version\": 1,\n  \"devices\": [";
+
+    bool wroteAny = false;
+    for (const auto& [deviceId, state] : orderedStates) {
+        const bool hasMeaningfulState =
+            !state.selectedKey.empty() ||
+            !state.currentTrackPath.empty() ||
+            state.resumePositionMs > 0 ||
+            state.mediaType != 1 ||
+            state.trackOrderMode != TrackOrderMode::Alphabetical ||
+            std::abs(state.volumeGain - 1.0F) > 0.001F;
+        if (!hasMeaningfulState) {
+            continue;
+        }
+
+        const auto channelIt = channels_.find(state.selectedKey);
+        std::string trackKind = "song";
+        if (channelIt != channels_.end() && !state.currentTrackPath.empty()) {
+            const auto fileName = toLower(pathToUtf8(state.currentTrackPath.filename()));
+            auto matchesPath = [&fileName](const std::vector<std::filesystem::path>& paths) {
+                for (const auto& pathEntry : paths) {
+                    if (toLower(pathToUtf8(pathEntry.filename())) == fileName) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (matchesPath(channelIt->second.transitions)) {
+                trackKind = "transition";
+            } else if (matchesPath(channelIt->second.ads)) {
+                trackKind = "ad";
+            }
+        }
+
+        if (!wroteAny) {
+            out << "\n";
+        } else {
+            out << ",\n";
+        }
+        wroteAny = true;
+
+        out << "    {\n";
+        out << "      \"device_id\": \"" << deviceId << "\",\n";
+        out << "      \"media_type\": " << std::clamp(state.mediaType, 1, 3) << ",\n";
+        out << "      \"play_mode\": " << static_cast<std::int32_t>(state.trackOrderMode) << ",\n";
+        out << "      \"selected_key\": \"" << jsonEscape(state.selectedKey) << "\",\n";
+        out << "      \"current_track_name\": \"" << jsonEscape(pathToUtf8(state.currentTrackPath.filename())) << "\",\n";
+        out << "      \"current_track_kind\": \"" << trackKind << "\",\n";
+        out << "      \"resume_position_ms\": " << state.resumePositionMs << ",\n";
+        out << "      \"song_index\": " << state.songIndex << ",\n";
+        out << "      \"transition_index\": " << state.transitionIndex << ",\n";
+        out << "      \"ad_index\": " << state.adIndex << ",\n";
+        out << "      \"songs_since_ad\": " << state.songsSinceAd << ",\n";
+        out << "      \"previous_was_song\": " << (state.previousWasSong ? "true" : "false") << ",\n";
+        out << "      \"volume_percent\": " << std::clamp(state.volumeGain * 100.0F, 0.0F, 200.0F) << ",\n";
+        out << "      \"shuffle_cursor\": " << state.shuffleCursor << ",\n";
+        out << "      \"shuffle_history\": [";
+        for (std::size_t i = 0; i < state.shuffleHistory.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            out << state.shuffleHistory[i];
+        }
+        out << "]\n";
+        out << "    }";
+    }
+
+    if (wroteAny) {
+        out << "\n";
+    }
+    out << "  ]\n}\n";
+
+    const auto path = sessionStatePathLocked();
+    const auto tempPath = path.parent_path() / (path.filename().string() + ".tmp");
+    std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        logger_.warn("Could not open session temp file for writing: " + pathToUtf8(tempPath));
+        return false;
+    }
+
+    const std::string payload = out.str();
+    file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    file.flush();
+    if (!file.good()) {
+        logger_.warn("Could not write radio session file: " + pathToUtf8(tempPath));
+        return false;
+    }
+    file.close();
+
+    std::filesystem::rename(tempPath, path, ec);
+    if (ec) {
+        std::filesystem::remove(path, ec);
+        ec.clear();
+        std::filesystem::rename(tempPath, path, ec);
+    }
+    if (ec) {
+        logger_.warn("Could not finalize session file: " + pathToUtf8(path));
+        return false;
+    }
+
+    sessionStateDirty_ = false;
+    lastSessionSaveTime_ = std::chrono::steady_clock::now();
+    logger_.info("Saved radio session state: " + pathToUtf8(path));
+    return true;
+}
+
+bool RadioEngine::maybeFlushPersistentSessionLocked(const bool force)
+{
+    if (!sessionStateDirty_) {
+        return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && lastSessionSaveTime_ != std::chrono::steady_clock::time_point{} &&
+        (now - lastSessionSaveTime_) < kSessionFlushInterval) {
+        return false;
+    }
+
+    return savePersistentSessionLocked();
+}
+
 bool RadioEngine::mciCommandLocked(const std::wstring& command, std::wstring* output)
 {
     std::array<wchar_t, 512> buffer{};
@@ -3329,7 +4390,7 @@ void RadioEngine::cleanupCurrentStreamTempFileLocked()
     streamWrapperTempPath_.clear();
 }
 
-RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
+RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked()
 {
     DeviceState snapshot;
     const auto it = deviceStates_.find(currentDeviceId_);
@@ -3338,15 +4399,20 @@ RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
         snapshot.volumeGain = it->second.volumeGain;
     }
 
+    snapshot.mediaType = mediaType_;
     snapshot.selectedKey = selectedKey_;
     snapshot.mode = mode_;
     snapshot.state = state_;
+    snapshot.trackOrderMode = trackOrderMode_;
     snapshot.currentTrackPath = currentTrackPath_;
+    snapshot.resumePositionMs = currentPlaybackPositionMsLocked();
     snapshot.songIndex = songIndex_;
     snapshot.transitionIndex = transitionIndex_;
     snapshot.adIndex = adIndex_;
     snapshot.songsSinceAd = songsSinceAd_;
     snapshot.previousWasSong = previousWasSong_;
+    snapshot.shuffleHistory = shuffleHistory_;
+    snapshot.shuffleCursor = shuffleCursor_;
     snapshot.emitterPosition = emitterPosition_;
     snapshot.playerPosition = playerPosition_;
     snapshot.playerYawDeg = playerYawDeg_;
@@ -3362,15 +4428,22 @@ RadioEngine::DeviceState RadioEngine::makeCurrentDeviceStateLocked() const
 
 void RadioEngine::applyDeviceStateLocked(const DeviceState& state)
 {
+    mediaType_ = std::clamp(state.mediaType, 1, 3);
     selectedKey_ = state.selectedKey;
     mode_ = state.mode;
     state_ = state.state;
+    trackOrderMode_ = state.trackOrderMode == TrackOrderMode::Shuffle
+        ? TrackOrderMode::Shuffle
+        : TrackOrderMode::Alphabetical;
     currentTrackPath_ = state.currentTrackPath;
+    resumePositionMs_ = state.resumePositionMs;
     songIndex_ = state.songIndex;
     transitionIndex_ = state.transitionIndex;
     adIndex_ = state.adIndex;
     songsSinceAd_ = state.songsSinceAd;
     previousWasSong_ = state.previousWasSong;
+    shuffleHistory_ = state.shuffleHistory;
+    shuffleCursor_ = state.shuffleCursor;
     emitterPosition_ = state.emitterPosition;
     playerPosition_ = state.playerPosition;
     playerYawDeg_ = state.playerYawDeg;
@@ -3386,6 +4459,7 @@ void RadioEngine::applyDeviceStateLocked(const DeviceState& state)
 void RadioEngine::syncCurrentDeviceStateLocked()
 {
     deviceStates_[currentDeviceId_] = makeCurrentDeviceStateLocked();
+    sessionStateDirty_ = true;
 }
 
 RadioEngine::DeviceState& RadioEngine::ensureDeviceStateLocked(std::uint64_t deviceId)
@@ -3396,6 +4470,8 @@ RadioEngine::DeviceState& RadioEngine::ensureDeviceStateLocked(std::uint64_t dev
     }
 
     DeviceState initial;
+    initial.mediaType = 1;
+    initial.trackOrderMode = TrackOrderMode::Alphabetical;
     initial.fadeOverride.enabled = false;
     initial.volumeGain = kDefaultVolumePercent / 100.0F;
     auto [insertIt, inserted] = deviceStates_.emplace(deviceId, std::move(initial));
@@ -3413,6 +4489,7 @@ void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
     syncCurrentDeviceStateLocked();
 
     if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+        syncResumePositionFromBackendLocked();
         stopPlaybackDeviceLocked(true);
         state_ = PlaybackState::Stopped;
         trackStartValid_ = false;
@@ -3460,6 +4537,7 @@ bool RadioEngine::runAsyncCommandForDevice(
             logger_.error("Unhandled unknown exception in async command.");
         }
         syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
         if (completion) {
             completion(result);
         }
@@ -3479,6 +4557,7 @@ bool RadioEngine::runAsyncCommandForDevice(
             logger_.error("Unhandled unknown exception in queued async command.");
         }
         syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
         if (completion) {
             completion(result);
         }
@@ -3498,6 +4577,7 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
         clearPlayInterruptRequest();
         const bool result = command();
         syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
         return result;
     }
 
@@ -3506,6 +4586,7 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
         clearPlayInterruptRequest();
         const bool result = command();
         syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
         return result;
     }
 
@@ -3529,6 +4610,7 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
             logger_.error("Unhandled unknown exception in queued command.");
         }
         syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
         pending->done = true;
         cv_.notify_all();
     });
@@ -3565,6 +4647,7 @@ void RadioEngine::workerLoop()
             commandQueue_.pop_front();
             command();
             syncCurrentDeviceStateLocked();
+            (void)maybeFlushPersistentSessionLocked();
             if (stopWorker_) {
                 break;
             }
@@ -3580,6 +4663,7 @@ void RadioEngine::workerLoop()
                 updateFadeVolumeLocked();
             }
             syncCurrentDeviceStateLocked();
+            (void)maybeFlushPersistentSessionLocked();
         }
     }
 
@@ -3591,5 +4675,6 @@ void RadioEngine::workerLoop()
     shutdownDirectShowLocked();
     shutdownMediaFoundationLocked();
     syncCurrentDeviceStateLocked();
+    (void)maybeFlushPersistentSessionLocked(true);
     workerThreadId_ = {};
 }

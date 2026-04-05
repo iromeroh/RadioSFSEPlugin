@@ -26,6 +26,8 @@ public:
 
     bool initialize();
     void shutdown();
+    void savePersistentSession();
+    void reloadPersistentSession();
 
     bool changePlaylist(const std::string& channelName, std::uint64_t deviceId = 0);
     bool play(std::uint64_t deviceId = 0);
@@ -43,9 +45,12 @@ public:
     bool volumeUp(float step, std::uint64_t deviceId = 0);
     bool volumeDown(float step, std::uint64_t deviceId = 0);
     float getVolume(std::uint64_t deviceId = 0) const;
+    std::int32_t getMediaType(std::uint64_t deviceId = 0) const;
+    std::int32_t getPlayMode(std::uint64_t deviceId = 0) const;
     float configuredVolumeStepPercent() const;
     std::int32_t configuredDebugVerbosity() const;
     bool setVolume(float volume, std::uint64_t deviceId = 0);
+    bool setPlayMode(std::int32_t playMode, std::uint64_t deviceId = 0);
     std::string getTrack(std::uint64_t deviceId = 0) const;
     bool setTrack(const std::string& trackBasename, std::uint64_t deviceId = 0);
     bool playFx(const std::string& fxBasename, std::uint64_t deviceId = 0);
@@ -89,6 +94,12 @@ private:
         Stopped,
         Playing,
         Paused
+    };
+
+    enum class TrackOrderMode
+    {
+        Alphabetical = 1,
+        Shuffle = 2
     };
 
     enum class PlaybackBackend
@@ -148,16 +159,21 @@ private:
 
     struct DeviceState
     {
+        std::int32_t mediaType{ 1 };
         std::string selectedKey;
         PlaybackMode mode{ PlaybackMode::None };
         PlaybackState state{ PlaybackState::Stopped };
+        TrackOrderMode trackOrderMode{ TrackOrderMode::Alphabetical };
         std::filesystem::path currentTrackPath;
+        std::uint64_t resumePositionMs{ 0 };
 
         std::size_t songIndex{ 0 };
         std::size_t transitionIndex{ 0 };
         std::size_t adIndex{ 0 };
         std::size_t songsSinceAd{ 0 };
         bool previousWasSong{ false };
+        std::vector<std::size_t> shuffleHistory{};
+        std::size_t shuffleCursor{ 0 };
 
         Position emitterPosition{};
         Position playerPosition{};
@@ -206,12 +222,22 @@ private:
     bool forwardLocked();
     bool rewindLocked();
     bool previousLocked();
+    void syncResumePositionFromBackendLocked();
+    std::uint64_t currentPlaybackPositionMsLocked();
+    bool seekCurrentPlaybackLocked(std::uint64_t positionMs);
+    void resetShuffleHistoryLocked();
+    std::optional<std::size_t> ensureShuffleCurrentSongLocked(const ChannelEntry& channel);
+    std::optional<std::size_t> advanceShuffleSongLocked(const ChannelEntry& channel);
+    std::optional<std::size_t> retreatShuffleSongLocked(const ChannelEntry& channel);
     bool updateTrackLocked(bool force);
     bool isTrackCompleteLocked();
     std::optional<std::filesystem::path> chooseCurrentTrackLocked() const;
     std::optional<std::filesystem::path> advanceAndChooseNextTrackLocked();
     void updateFadeVolumeLocked();
     double distanceLocked() const;
+    std::filesystem::path sessionStatePathLocked() const;
+    bool loadPersistentSessionLocked();
+    bool savePersistentSessionLocked();
 
     bool mciCommandLocked(const std::wstring& command, std::wstring* output = nullptr);
     bool mciStatusNumberLocked(const std::wstring& statusName, int& outValue);
@@ -219,12 +245,13 @@ private:
     bool mciStatusModeSilentLocked(std::wstring& outMode);
     bool waitForAliasClosedLocked(std::chrono::milliseconds timeout);
     void cleanupCurrentStreamTempFileLocked();
+    bool maybeFlushPersistentSessionLocked(bool force = false);
     bool runAsyncCommandForDevice(
         std::uint64_t deviceId,
         const std::function<bool()>& command,
         const std::function<void(bool result)>& completion = {});
     bool runBoolCommandForDevice(std::uint64_t deviceId, const std::function<bool()>& command);
-    DeviceState makeCurrentDeviceStateLocked() const;
+    DeviceState makeCurrentDeviceStateLocked();
     void applyDeviceStateLocked(const DeviceState& state);
     void syncCurrentDeviceStateLocked();
     DeviceState& ensureDeviceStateLocked(std::uint64_t deviceId);
@@ -252,16 +279,21 @@ private:
     std::unordered_map<std::uint64_t, DeviceState> deviceStates_;
     std::uint64_t currentDeviceId_{ 0 };
     PlaybackBackend backend_{ PlaybackBackend::None };
+    std::int32_t mediaType_{ 1 };
     std::string selectedKey_;
     PlaybackMode mode_{ PlaybackMode::None };
     PlaybackState state_{ PlaybackState::Stopped };
+    TrackOrderMode trackOrderMode_{ TrackOrderMode::Alphabetical };
     std::filesystem::path currentTrackPath_;
+    std::uint64_t resumePositionMs_{ 0 };
 
     std::size_t songIndex_{ 0 };
     std::size_t transitionIndex_{ 0 };
     std::size_t adIndex_{ 0 };
     std::size_t songsSinceAd_{ 0 };
     bool previousWasSong_{ false };
+    std::vector<std::size_t> shuffleHistory_{};
+    std::size_t shuffleCursor_{ 0 };
 
     Position emitterPosition_{};
     Position playerPosition_{};
@@ -275,4 +307,6 @@ private:
     bool trackStartValid_{ false };
     std::filesystem::path streamWrapperTempPath_;
     std::atomic<bool> playInterruptRequested_{ false };
+    bool sessionStateDirty_{ false };
+    std::chrono::steady_clock::time_point lastSessionSaveTime_{};
 };

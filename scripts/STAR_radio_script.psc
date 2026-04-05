@@ -6,6 +6,8 @@ STAR_Start_Quest_Script Property mgr Auto
 ; Define the message box/menu items
 Message Property MyMenuMessage Auto
 Float Property VolumeStep = 20.0 Auto
+Int Property MenuButton_PlayMode = 9 Auto Const
+Int Property MenuButton_Take = 8 Auto Const
 
 
 Bool Function EnsureManager()
@@ -80,7 +82,7 @@ Event OnInit()
 EndEvent
 
 Event OnLoad()
-	; Keep default pickup blocked; explicit option 8 performs default processing.
+	; Keep default pickup blocked; explicit pickup option performs default processing.
 	BlockActivation(true)
 EndEvent
 
@@ -129,9 +131,9 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         return false
     endif
 
-    ; 0-type, 1-playlist, 2-play/stop, 3-forward, 4-rewind, 5-previous, 6-vol+, 7-vol-, 8-take
+    ; 0-type, 1-playlist, 2-play/stop, 3-forward, 4-rewind, 5-previous, 6-vol+, 7-vol-, 8-take, 9-play mode (optional)
     int buttonID = MyMenuMessage.Show()
-    if emitterRef != mgr.getEmitter() && buttonID != 8 && !mgr.RadioIsPlaying(emitterRef)
+    if emitterRef != mgr.getEmitter() && buttonID != MenuButton_Take && !mgr.RadioIsPlaying(emitterRef)
         mgr.ApplyPersistentStateToEmitter(emitterRef)
     endif
 
@@ -299,7 +301,27 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         endif
         mgr.CapturePersistentState(emitterRef)
 
-    elseif buttonID == 8
+    elseif buttonID == MenuButton_PlayMode
+        Int playMode = mgr.RadioGetPlayMode(emitterRef)
+        if playMode == 2
+            playMode = 1
+        else
+            playMode = 2
+        endif
+
+        Bool playModeOk = mgr.RadioSetPlayMode(emitterRef, playMode)
+        if !playModeOk
+            String errPlayMode = mgr.RadioLastError(emitterRef)
+            if errPlayMode == ""
+                errPlayMode = "Could not change play mode."
+            endif
+            Notify(errPlayMode, true)
+        else
+            Notify("Play mode: " + mgr.PlayModeName(playMode), True)
+        endif
+        mgr.CapturePersistentState(emitterRef)
+
+    elseif buttonID == MenuButton_Take
         ; Explicit pickup path only.
         Notify("Taking radio into inventory.")
         self.Activate(Game.GetPlayer(), true)

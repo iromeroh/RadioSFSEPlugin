@@ -64,9 +64,12 @@ private:
     static bool nativeVolumeUp(std::monostate, RE::TESObjectREFR* activatorRef, float step);
     static bool nativeVolumeDown(std::monostate, RE::TESObjectREFR* activatorRef, float step);
     static float nativeGetVolume(std::monostate, RE::TESObjectREFR* activatorRef);
+    static std::int32_t nativeGetMediaType(std::monostate, RE::TESObjectREFR* activatorRef);
+    static std::int32_t nativeGetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef);
     static float nativeGetVolumeStepPercent(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::int32_t nativeGetDebugVerbosity(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume);
+    static bool nativeSetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t playMode);
     static std::string nativeGetTrack(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorRef, std::string trackBasename);
     static bool nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef, std::string fxBasename);

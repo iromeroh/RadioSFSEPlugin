@@ -7,7 +7,7 @@ Scriptname STAR_Radio_Terminal_Menu_Script extends TerminalMenu Conditional
 ; - Set `RadioTerminalMenu_Main` to the main menu form that contains the radio actions.
 ; - Optionally set `RadioTerminalMenu_Submenu` if actions are in a submenu.
 ; - Menu item IDs default to the same action mapping used by the portable radio UI:
-;   0 media type, 1 source, 2 play/pause, 3 forward, 4 rewind, 5 volume up, 6 volume down.
+;   0 media type, 1 source, 2 play/pause, 3 forward, 4 rewind, 5 volume up, 6 volume down, 7 play mode.
 ; Behavior:
 ; - Using the terminal promotes it to active emitter.
 ; - Optional stop of previous emitter prevents overlapping audio when swapping devices.
@@ -30,6 +30,7 @@ Int Property MenuItem_Forward = 3 Auto Const
 Int Property MenuItem_Rewind = 4 Auto Const
 Int Property MenuItem_VolumeUp = 5 Auto Const
 Int Property MenuItem_VolumeDown = 6 Auto Const
+Int Property MenuItem_PlayMode = 7 Auto Const
 
 Bool Function EnsureManager()
 	if mgr == None
@@ -316,6 +317,26 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		else
 			Float volDown = mgr.RadioGetVolume(akTerminalRef)
 			Notify("Volume: " + volDown, true)
+		endif
+		mgr.CapturePersistentState(akTerminalRef)
+
+	elseif auiMenuItemID == MenuItem_PlayMode
+		Int playMode = mgr.RadioGetPlayMode(akTerminalRef)
+		if playMode == 2
+			playMode = 1
+		else
+			playMode = 2
+		endif
+
+		Bool playModeOk = mgr.RadioSetPlayMode(akTerminalRef, playMode)
+		if !playModeOk
+			String errPlayMode = mgr.RadioLastError(akTerminalRef)
+			if errPlayMode == ""
+				errPlayMode = "Could not change play mode."
+			endif
+			Notify(errPlayMode, true)
+		else
+			Notify("Play mode: " + mgr.PlayModeName(playMode), true)
 		endif
 		mgr.CapturePersistentState(akTerminalRef)
 	else

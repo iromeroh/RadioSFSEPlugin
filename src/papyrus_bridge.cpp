@@ -5,18 +5,83 @@
 #include "RE/A/Array.h"
 #include "RE/M/MemoryManager.h"
 #include "RE/B/BSScriptUtil.h"
+#include "RE/T/TESObjectCELL.h"
 #include "RE/T/TESObjectREFR.h"
+#include "RE/T/TESWorldSpace.h"
 #include "RE/V/VirtualMachine.h"
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <variant>
 
 namespace
 {
+constexpr std::uint32_t kPlayerFormId = 0x14;
+constexpr std::uint64_t kDerivedWorldDevicePrefix = 0x8000000000000000ULL;
+constexpr double kWorldDevicePositionBucketUnits = 16.0;
+constexpr double kWorldDeviceAngleBucketDegrees = 15.0;
+
+void fnv1aMix(std::uint64_t& hash, const std::uint64_t value)
+{
+    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+    for (std::size_t i = 0; i < sizeof(value); ++i) {
+        const auto byte = static_cast<std::uint8_t>((value >> (i * 8)) & 0xFF);
+        hash ^= static_cast<std::uint64_t>(byte);
+        hash *= kFnvPrime;
+    }
+}
+
+std::uint64_t derivedWorldDeviceKey(RE::TESObjectREFR* activatorRef)
+{
+    std::uint64_t hash = 1469598103934665603ULL;
+
+    const auto mixBucketed = [&hash](const double value, const double bucketSize) {
+        const double safeBucket = bucketSize > 0.0 ? bucketSize : 1.0;
+        const auto quantized = static_cast<std::int64_t>(std::llround(value / safeBucket));
+        fnv1aMix(hash, static_cast<std::uint64_t>(quantized));
+    };
+
+    const auto baseObject = activatorRef->GetBaseObject();
+    fnv1aMix(hash, baseObject ? static_cast<std::uint64_t>(baseObject->GetFormID()) : 0ULL);
+
+    const auto* parentCell = activatorRef->parentCell;
+    fnv1aMix(hash, parentCell != nullptr ? static_cast<std::uint64_t>(parentCell->GetFormID()) : 0ULL);
+    if (parentCell != nullptr && parentCell->IsExterior() && parentCell->cellData.exterior != nullptr) {
+        fnv1aMix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(parentCell->cellData.exterior->cellX)));
+        fnv1aMix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(parentCell->cellData.exterior->cellY)));
+    }
+
+    RE::TESWorldSpace* worldSpace = nullptr;
+    if (parentCell != nullptr) {
+        worldSpace = parentCell->cellWorldspace;
+    }
+    fnv1aMix(hash, worldSpace != nullptr ? static_cast<std::uint64_t>(worldSpace->GetFormID()) : 0ULL);
+
+    mixBucketed(activatorRef->GetPositionX(), kWorldDevicePositionBucketUnits);
+    mixBucketed(activatorRef->GetPositionY(), kWorldDevicePositionBucketUnits);
+    mixBucketed(activatorRef->GetPositionZ(), kWorldDevicePositionBucketUnits);
+    mixBucketed(activatorRef->GetAngleZ(), kWorldDeviceAngleBucketDegrees);
+
+    return kDerivedWorldDevicePrefix | (hash & ~kDerivedWorldDevicePrefix);
+}
+
 std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
 {
-    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(activatorRef));
+    if (activatorRef == nullptr) {
+        return 0;
+    }
+
+    const auto formId = activatorRef->GetFormID();
+    if (formId == kPlayerFormId) {
+        return static_cast<std::uint64_t>(formId);
+    }
+
+    if (activatorRef->parentCell != nullptr) {
+        return derivedWorldDeviceKey(activatorRef);
+    }
+
+    return static_cast<std::uint64_t>(formId);
 }
 
 std::string buildFailureMessage(
@@ -137,6 +202,11 @@ void PapyrusBridge::onSFSEMessage(SFSEMessagingInterface::Message* message)
     }
 
     self->logger_.info(std::string("[M5] SFSE message received: ") + messageTypeName(message->type));
+    if (message->type == SFSEMessagingInterface::kMessage_PreSaveGame) {
+        self->engine_.savePersistentSession();
+    } else if (message->type == SFSEMessagingInterface::kMessage_PostLoadGame) {
+        self->engine_.reloadPersistentSession();
+    }
     (void)self->tryRegisterNatives(messageTypeName(message->type));
 }
 
@@ -208,9 +278,12 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "volumeUp", &PapyrusBridge::nativeVolumeUp, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "volumeDown", &PapyrusBridge::nativeVolumeDown, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getVolume", &PapyrusBridge::nativeGetVolume, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getMediaType", &PapyrusBridge::nativeGetMediaType, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getPlayMode", &PapyrusBridge::nativeGetPlayMode, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getVolumeStepPercent", &PapyrusBridge::nativeGetVolumeStepPercent, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getDebugVerbosity", &PapyrusBridge::nativeGetDebugVerbosity, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setVolume", &PapyrusBridge::nativeSetVolume, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "setPlayMode", &PapyrusBridge::nativeSetPlayMode, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getTrack", &PapyrusBridge::nativeGetTrack, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setTrack", &PapyrusBridge::nativeSetTrack, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "playFx", &PapyrusBridge::nativePlayFx, std::nullopt, false);
@@ -609,6 +682,26 @@ float PapyrusBridge::nativeGetVolume(std::monostate, RE::TESObjectREFR* activato
     return self->engine_.getVolume(deviceKeyFromRef(activatorRef));
 }
 
+std::int32_t PapyrusBridge::nativeGetMediaType(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return 1;
+    }
+
+    return self->engine_.getMediaType(deviceKeyFromRef(activatorRef));
+}
+
+std::int32_t PapyrusBridge::nativeGetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return 1;
+    }
+
+    return self->engine_.getPlayMode(deviceKeyFromRef(activatorRef));
+}
+
 float PapyrusBridge::nativeGetVolumeStepPercent(std::monostate, RE::TESObjectREFR*)
 {
     PapyrusBridge* self = g_instance_;
@@ -644,6 +737,27 @@ bool PapyrusBridge::nativeSetVolume(std::monostate, RE::TESObjectREFR* activator
     const bool ok = self->engine_.setVolume(volume, deviceId);
     if (!ok) {
         self->setLastError(deviceId, buildFailureMessage(self->engine_, deviceId, "setVolume"));
+    } else {
+        self->clearLastError(deviceId);
+    }
+    return ok;
+}
+
+bool PapyrusBridge::nativeSetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t playMode)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    if (!self->shouldAcceptCommand("setPlayMode", activatorRef)) {
+        return false;
+    }
+
+    const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
+    const bool ok = self->engine_.setPlayMode(playMode, deviceId);
+    if (!ok) {
+        self->setLastError(deviceId, "Unable to set play mode.");
     } else {
         self->clearLastError(deviceId);
     }

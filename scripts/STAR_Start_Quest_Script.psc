@@ -472,6 +472,58 @@ Float Function RadioGetVolume(ObjectReference emitterRef)
 	return FallbackVolume
 EndFunction
 
+Int Function RadioGetMediaType(ObjectReference emitterRef = None)
+	if emitterRef == None
+		emitterRef = ResolveEmitterForControls()
+	endif
+	if emitterRef == None
+		emitterRef = ResolveEmitterForState()
+	endif
+
+	if IsSFSEAvailable(emitterRef)
+		Int nativeType = RadioSFSENative.getMediaType(emitterRef)
+		if nativeType >= 1 && nativeType <= 3
+			mediaType = nativeType
+			return nativeType
+		endif
+	endif
+
+	return mediaType
+EndFunction
+
+Int Function RadioGetPlayMode(ObjectReference emitterRef = None)
+	if emitterRef == None
+		emitterRef = ResolveEmitterForControls()
+	endif
+	if emitterRef == None
+		emitterRef = ResolveEmitterForState()
+	endif
+
+	if IsSFSEAvailable(emitterRef)
+		Int nativeMode = RadioSFSENative.getPlayMode(emitterRef)
+		if nativeMode == 2
+			return 2
+		endif
+		return 1
+	endif
+
+	return 1
+EndFunction
+
+Bool Function RadioSetPlayMode(ObjectReference emitterRef, Int playMode)
+	if IsSFSEAvailable(emitterRef)
+		return RadioSFSENative.setPlayMode(emitterRef, playMode)
+	endif
+	return false
+EndFunction
+
+String Function PlayModeName(Int playMode)
+	if playMode == 2
+		return "Shuffle"
+	endif
+	return "Alphabetic"
+EndFunction
+
 Bool Function RadioSetVolume(ObjectReference emitterRef, Float volume)
 	if IsSFSEAvailable(emitterRef)
 		return RadioSFSENative.setVolume(emitterRef, volume)
@@ -540,7 +592,7 @@ Bool Function RadioPlay(ObjectReference emitterRef)
 	endif
 
 	if IsSFSEAvailable(emitterRef)
-		Int category = mediaType
+		Int category = RadioGetMediaType(emitterRef)
 		if category < 1 || category > 3
 			category = 1
 		endif
@@ -1021,7 +1073,8 @@ Function NotifyTrackChangeIfNeeded(ObjectReference emitterRef)
 	endif
 
 	; Track-change notifications are only for local playlists/stations (1/2), not streams (3).
-	if mediaType != 1 && mediaType != 2
+	Int currentMediaType = RadioGetMediaType(emitterRef)
+	if currentMediaType != 1 && currentMediaType != 2
 		ResetTrackChangeNotification(emitterRef)
 		return
 	endif
@@ -1269,6 +1322,31 @@ Function ApplyPersistentStateToEmitter(ObjectReference emitterRef)
 		return
 	endif
 
+	if IsSFSEAvailable(emitterRef)
+		mediaType = RadioGetMediaType(emitterRef)
+		String nativeSource = RadioCurrentSourceName(emitterRef)
+		if nativeSource == "" && HasPersistentState
+			RadioChangeToNextSource(emitterRef, mediaType)
+
+			String sourceToApplyNative = PersistentSourceName
+			if sourceToApplyNative == ""
+				sourceToApplyNative = StartupPlaylist
+			endif
+			if sourceToApplyNative != ""
+				RadioChangePlaylist(emitterRef, sourceToApplyNative)
+			endif
+
+			if PersistentTrackName != "" && PersistentTrackName != "na"
+				RadioSetTrack(emitterRef, PersistentTrackName)
+			endif
+
+			RadioSetVolume(emitterRef, PersistentVolume)
+		endif
+
+		ApplyFadeParams(emitterRef)
+		return
+	endif
+
 	RadioChangeToNextSource(emitterRef, mediaType)
 
 	String sourceToApply = PersistentSourceName
@@ -1293,6 +1371,10 @@ Function CapturePersistentState(ObjectReference emitterRef = None)
 	endif
 	if emitterRef == None
 		return
+	endif
+
+	if IsSFSEAvailable(emitterRef)
+		mediaType = RadioGetMediaType(emitterRef)
 	endif
 
 	String sourceName = RadioCurrentSourceName(emitterRef)
@@ -1354,7 +1436,7 @@ Function setMediaType(int type, ObjectReference targetEmitter = None)
 EndFunction
 
 int Function getMediaType()
-	return mediaType
+	return RadioGetMediaType()
 EndFunction
 
 Function setStartupPlaylist(String playlist, ObjectReference targetEmitter = None)
