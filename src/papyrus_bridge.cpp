@@ -5,66 +5,16 @@
 #include "RE/A/Array.h"
 #include "RE/M/MemoryManager.h"
 #include "RE/B/BSScriptUtil.h"
-#include "RE/T/TESObjectCELL.h"
 #include "RE/T/TESObjectREFR.h"
-#include "RE/T/TESWorldSpace.h"
 #include "RE/V/VirtualMachine.h"
 
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <variant>
 
 namespace
 {
-constexpr std::uint32_t kPlayerFormId = 0x14;
-constexpr std::uint64_t kDerivedWorldDevicePrefix = 0x8000000000000000ULL;
-constexpr double kWorldDevicePositionBucketUnits = 16.0;
-constexpr double kWorldDeviceAngleBucketDegrees = 15.0;
-
-void fnv1aMix(std::uint64_t& hash, const std::uint64_t value)
-{
-    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-    for (std::size_t i = 0; i < sizeof(value); ++i) {
-        const auto byte = static_cast<std::uint8_t>((value >> (i * 8)) & 0xFF);
-        hash ^= static_cast<std::uint64_t>(byte);
-        hash *= kFnvPrime;
-    }
-}
-
-std::uint64_t derivedWorldDeviceKey(RE::TESObjectREFR* activatorRef)
-{
-    std::uint64_t hash = 1469598103934665603ULL;
-
-    const auto mixBucketed = [&hash](const double value, const double bucketSize) {
-        const double safeBucket = bucketSize > 0.0 ? bucketSize : 1.0;
-        const auto quantized = static_cast<std::int64_t>(std::llround(value / safeBucket));
-        fnv1aMix(hash, static_cast<std::uint64_t>(quantized));
-    };
-
-    const auto baseObject = activatorRef->GetBaseObject();
-    fnv1aMix(hash, baseObject ? static_cast<std::uint64_t>(baseObject->GetFormID()) : 0ULL);
-
-    const auto* parentCell = activatorRef->parentCell;
-    fnv1aMix(hash, parentCell != nullptr ? static_cast<std::uint64_t>(parentCell->GetFormID()) : 0ULL);
-    if (parentCell != nullptr && parentCell->IsExterior() && parentCell->cellData.exterior != nullptr) {
-        fnv1aMix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(parentCell->cellData.exterior->cellX)));
-        fnv1aMix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(parentCell->cellData.exterior->cellY)));
-    }
-
-    RE::TESWorldSpace* worldSpace = nullptr;
-    if (parentCell != nullptr) {
-        worldSpace = parentCell->cellWorldspace;
-    }
-    fnv1aMix(hash, worldSpace != nullptr ? static_cast<std::uint64_t>(worldSpace->GetFormID()) : 0ULL);
-
-    mixBucketed(activatorRef->GetPositionX(), kWorldDevicePositionBucketUnits);
-    mixBucketed(activatorRef->GetPositionY(), kWorldDevicePositionBucketUnits);
-    mixBucketed(activatorRef->GetPositionZ(), kWorldDevicePositionBucketUnits);
-    mixBucketed(activatorRef->GetAngleZ(), kWorldDeviceAngleBucketDegrees);
-
-    return kDerivedWorldDevicePrefix | (hash & ~kDerivedWorldDevicePrefix);
-}
+constexpr std::uint64_t kSharedRadioDeviceId = 0x14;
 
 std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
 {
@@ -72,16 +22,7 @@ std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
         return 0;
     }
 
-    const auto formId = activatorRef->GetFormID();
-    if (formId == kPlayerFormId) {
-        return static_cast<std::uint64_t>(formId);
-    }
-
-    if (activatorRef->parentCell != nullptr) {
-        return derivedWorldDeviceKey(activatorRef);
-    }
-
-    return static_cast<std::uint64_t>(formId);
+    return kSharedRadioDeviceId;
 }
 
 std::string buildFailureMessage(

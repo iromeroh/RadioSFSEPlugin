@@ -6,8 +6,8 @@ STAR_Start_Quest_Script Property mgr Auto
 ; Define the message box/menu items
 Message Property MyMenuMessage Auto
 Float Property VolumeStep = 20.0 Auto
-Int Property MenuButton_PlayMode = 9 Auto Const
-Int Property MenuButton_Take = 8 Auto Const
+Int Property MenuButton_PlayMode = 8 Auto Const
+Int Property MenuButton_Take = 9 Auto Const
 
 
 Bool Function EnsureManager()
