@@ -1,4 +1,4 @@
-#include "REX/REX/LOG.h"
+#include "REX/LOG.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -6,20 +6,20 @@
 
 namespace
 {
-const char* levelToString(const REX::LOG_LEVEL level)
+const char* levelToString(const REX::ELogLevel level)
 {
     switch (level) {
-    case REX::LOG_LEVEL::TRACE:
+    case REX::ELogLevel::Trace:
         return "TRACE";
-    case REX::LOG_LEVEL::DEBUG:
+    case REX::ELogLevel::Debug:
         return "DEBUG";
-    case REX::LOG_LEVEL::INFO:
+    case REX::ELogLevel::Info:
         return "INFO";
-    case REX::LOG_LEVEL::WARN:
+    case REX::ELogLevel::Warning:
         return "WARN";
-    case REX::LOG_LEVEL::ERROR:
+    case REX::ELogLevel::Error:
         return "ERROR";
-    case REX::LOG_LEVEL::CRITICAL:
+    case REX::ELogLevel::Critical:
         return "CRITICAL";
     default:
         return "LOG";
@@ -27,9 +27,9 @@ const char* levelToString(const REX::LOG_LEVEL level)
 }
 }
 
-namespace REX
+namespace REX::Impl
 {
-void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::string_view a_fmt)
+void Log(const std::source_location a_loc, const ELogLevel a_level, const std::string_view a_fmt)
 {
     std::fprintf(
         stderr,
@@ -40,7 +40,7 @@ void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::s
         std::string(a_fmt).c_str());
 }
 
-void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt)
+void Log(const std::source_location a_loc, const ELogLevel a_level, const std::wstring_view a_fmt)
 {
     std::string narrow;
     narrow.reserve(a_fmt.size());
@@ -51,21 +51,18 @@ void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::w
             narrow.push_back('?');
         }
     }
-    LOG(a_loc, a_level, narrow);
-}
+    Log(a_loc, a_level, narrow);
 }
 
-namespace REX::IMPL
+void Fail(const std::source_location a_loc, const std::string_view a_fmt)
 {
-void FAIL(const std::source_location a_loc, const std::string_view a_fmt)
-{
-    REX::LOG(a_loc, REX::LOG_LEVEL::CRITICAL, a_fmt);
+    Log(a_loc, ELogLevel::Critical, a_fmt);
     std::abort();
 }
 
-void FAIL(const std::source_location a_loc, const std::wstring_view a_fmt)
+void Fail(const std::source_location a_loc, const std::wstring_view a_fmt)
 {
-    REX::LOG(a_loc, REX::LOG_LEVEL::CRITICAL, a_fmt);
+    Log(a_loc, ELogLevel::Critical, a_fmt);
     std::abort();
 }
 }

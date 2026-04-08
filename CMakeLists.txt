@@ -8,10 +8,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(COMMONLIB_SHARED_SOURCES
     external/commonlibsf/lib/commonlib-shared/src/REL/IDDB.cpp
-    external/commonlibsf/lib/commonlib-shared/src/REL/Module.cpp
     external/commonlibsf/lib/commonlib-shared/src/REL/Offset2ID.cpp
     external/commonlibsf/lib/commonlib-shared/src/REL/Utility.cpp
     external/commonlibsf/lib/commonlib-shared/src/REL/Version.cpp
+    external/commonlibsf/lib/commonlib-shared/src/REX/FModule.cpp
     external/commonlibsf/lib/commonlib-shared/src/REX/REX.cpp
     external/commonlibsf/lib/commonlib-shared/src/REX/W32.cpp
 )
@@ -35,7 +35,7 @@ add_library(RadioSFSEPlugin SHARED
 
 target_include_directories(RadioSFSEPlugin PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src/sfse-0.2.18"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/sfse-0.2.19"
     "${CMAKE_CURRENT_SOURCE_DIR}/external/commonlibsf/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/external/commonlibsf/lib/commonlib-shared/include"
 )
