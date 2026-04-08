@@ -299,13 +299,30 @@ void PapyrusBridge::nativeChangePlaylist(std::monostate, RE::TESObjectREFR* acti
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.changePlaylist(channelName, deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "change_playlist");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.changePlaylistAsync(channelName, deviceId, [deviceId, channelName](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        const std::string message = buildFailureMessage(bridge->engine_, deviceId, "change_playlist");
+        bridge->setLastError(deviceId, message);
+        bridge->logger_.warn("Papyrus change_playlist failed for channel: " + channelName + " | " + message);
+    });
+
+    if (!queued) {
+        const std::string message = "Unable to queue playlist change.";
         self->setLastError(deviceId, message);
         self->logger_.warn("Papyrus change_playlist failed for channel: " + channelName + " | " + message);
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativePlay(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -356,13 +373,30 @@ void PapyrusBridge::nativeStart(std::monostate, RE::TESObjectREFR* activatorRef)
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.start(deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "start");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.startAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        const std::string message = buildFailureMessage(bridge->engine_, deviceId, "start");
+        bridge->setLastError(deviceId, message);
+        bridge->logger_.warn("Papyrus start failed. " + message);
+    });
+
+    if (!queued) {
+        const std::string message = "Unable to queue start command.";
         self->setLastError(deviceId, message);
         self->logger_.warn("Papyrus start failed. " + message);
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativePause(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -397,12 +431,28 @@ void PapyrusBridge::nativeStop(std::monostate, RE::TESObjectREFR* activatorRef)
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.stop(deviceId)) {
-        self->setLastError(deviceId, "Unable to stop playback.");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.stopAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        bridge->setLastError(deviceId, "Unable to stop playback.");
+        bridge->logger_.warn("Papyrus stop failed.");
+    });
+
+    if (!queued) {
+        self->setLastError(deviceId, "Unable to queue stop playback.");
         self->logger_.warn("Papyrus stop failed.");
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativeForward(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -417,13 +467,30 @@ void PapyrusBridge::nativeForward(std::monostate, RE::TESObjectREFR* activatorRe
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.forward(deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "forward");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.forwardAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        const std::string message = buildFailureMessage(bridge->engine_, deviceId, "forward");
+        bridge->setLastError(deviceId, message);
+        bridge->logger_.warn("Papyrus forward failed. " + message);
+    });
+
+    if (!queued) {
+        const std::string message = "Unable to queue forward command.";
         self->setLastError(deviceId, message);
         self->logger_.warn("Papyrus forward failed. " + message);
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -438,13 +505,30 @@ void PapyrusBridge::nativeRewind(std::monostate, RE::TESObjectREFR* activatorRef
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.rewind(deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "rewind");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.rewindAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        const std::string message = buildFailureMessage(bridge->engine_, deviceId, "rewind");
+        bridge->setLastError(deviceId, message);
+        bridge->logger_.warn("Papyrus rewind failed. " + message);
+    });
+
+    if (!queued) {
+        const std::string message = "Unable to queue rewind command.";
         self->setLastError(deviceId, message);
         self->logger_.warn("Papyrus rewind failed. " + message);
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 void PapyrusBridge::nativePrevious(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -459,13 +543,30 @@ void PapyrusBridge::nativePrevious(std::monostate, RE::TESObjectREFR* activatorR
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    if (!self->engine_.previous(deviceId)) {
-        const std::string message = buildFailureMessage(self->engine_, deviceId, "previous");
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.previousAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        const std::string message = buildFailureMessage(bridge->engine_, deviceId, "previous");
+        bridge->setLastError(deviceId, message);
+        bridge->logger_.warn("Papyrus previous failed. " + message);
+    });
+
+    if (!queued) {
+        const std::string message = "Unable to queue previous command.";
         self->setLastError(deviceId, message);
         self->logger_.warn("Papyrus previous failed. " + message);
         return;
     }
-    self->clearLastError(deviceId);
 }
 
 bool PapyrusBridge::nativePluginAvailable(std::monostate, RE::TESObjectREFR*)
@@ -727,13 +828,27 @@ bool PapyrusBridge::nativeSetTrack(std::monostate, RE::TESObjectREFR* activatorR
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    const bool ok = self->engine_.setTrack(trackBasename, deviceId);
-    if (!ok) {
-        self->setLastError(deviceId, buildFailureMessage(self->engine_, deviceId, "setTrack"));
-    } else {
-        self->clearLastError(deviceId);
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.setTrackAsync(trackBasename, deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        bridge->setLastError(deviceId, buildFailureMessage(bridge->engine_, deviceId, "setTrack"));
+    });
+
+    if (!queued) {
+        self->setLastError(deviceId, "Unable to queue track change.");
+        return false;
     }
-    return ok;
+    return true;
 }
 
 bool PapyrusBridge::nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef, std::string fxBasename)
@@ -748,13 +863,27 @@ bool PapyrusBridge::nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    const bool ok = self->engine_.playFx(fxBasename, deviceId);
-    if (!ok) {
-        self->setLastError(deviceId, "FX not found or failed to play.");
-    } else {
-        self->clearLastError(deviceId);
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.playFxAsync(fxBasename, deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        bridge->setLastError(deviceId, "FX not found or failed to play.");
+    });
+
+    if (!queued) {
+        self->setLastError(deviceId, "Unable to queue FX playback.");
+        return false;
     }
-    return ok;
+    return true;
 }
 
 bool PapyrusBridge::nativeStopFx(std::monostate, RE::TESObjectREFR* activatorRef)
@@ -769,13 +898,27 @@ bool PapyrusBridge::nativeStopFx(std::monostate, RE::TESObjectREFR* activatorRef
     }
 
     const std::uint64_t deviceId = deviceKeyFromRef(activatorRef);
-    const bool ok = self->engine_.stopFx(deviceId);
-    if (!ok) {
-        self->setLastError(deviceId, "Unable to stop FX.");
-    } else {
-        self->clearLastError(deviceId);
+    self->clearLastError(deviceId);
+
+    const bool queued = self->engine_.stopFxAsync(deviceId, [deviceId](const bool result) {
+        PapyrusBridge* bridge = g_instance_;
+        if (bridge == nullptr || bridge->shuttingDown_.load()) {
+            return;
+        }
+
+        if (result) {
+            bridge->clearLastError(deviceId);
+            return;
+        }
+
+        bridge->setLastError(deviceId, "Unable to stop FX.");
+    });
+
+    if (!queued) {
+        self->setLastError(deviceId, "Unable to queue FX stop.");
+        return false;
     }
-    return ok;
+    return true;
 }
 
 std::string PapyrusBridge::nativeLastError(std::monostate, RE::TESObjectREFR* activatorRef)

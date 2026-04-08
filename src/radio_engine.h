@@ -30,13 +30,32 @@ public:
     void reloadPersistentSession();
 
     bool changePlaylist(const std::string& channelName, std::uint64_t deviceId = 0);
+    bool changePlaylistAsync(
+        const std::string& channelName,
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool play(std::uint64_t deviceId = 0);
     bool start(std::uint64_t deviceId = 0);
+    bool startAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool pause(std::uint64_t deviceId = 0);
     bool stop(std::uint64_t deviceId = 0);
+    bool stopAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool forward(std::uint64_t deviceId = 0);
+    bool forwardAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool rewind(std::uint64_t deviceId = 0);
+    bool rewindAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool previous(std::uint64_t deviceId = 0);
+    bool previousAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool rescanLibrary(std::uint64_t deviceId = 0);
     bool isPlaying(std::uint64_t deviceId = 0) const;
     bool changeToNextSource(int category, std::uint64_t deviceId = 0);
@@ -53,8 +72,19 @@ public:
     bool setPlayMode(std::int32_t playMode, std::uint64_t deviceId = 0);
     std::string getTrack(std::uint64_t deviceId = 0) const;
     bool setTrack(const std::string& trackBasename, std::uint64_t deviceId = 0);
+    bool setTrackAsync(
+        const std::string& trackBasename,
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool playFx(const std::string& fxBasename, std::uint64_t deviceId = 0);
+    bool playFxAsync(
+        const std::string& fxBasename,
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     bool stopFx(std::uint64_t deviceId = 0);
+    bool stopFxAsync(
+        std::uint64_t deviceId = 0,
+        const std::function<void(bool result)>& completion = {});
     void requestPlayInterrupt(std::uint64_t deviceId = 0);
     bool playAsync(
         std::uint64_t deviceId,
@@ -115,6 +145,14 @@ private:
         float x{ 0.0F };
         float y{ 0.0F };
         float z{ 0.0F };
+    };
+
+    struct PendingPositionSample
+    {
+        std::uint64_t deviceId{ 0 };
+        Position emitter{};
+        Position player{};
+        float playerYawDeg{ 0.0F };
     };
 
     struct Config
@@ -256,6 +294,7 @@ private:
     void syncCurrentDeviceStateLocked();
     DeviceState& ensureDeviceStateLocked(std::uint64_t deviceId);
     void switchToDeviceLocked(std::uint64_t deviceId);
+    bool applyPendingPositionSampleLocked();
 
     void workerLoop();
 
@@ -307,6 +346,9 @@ private:
     bool trackStartValid_{ false };
     std::filesystem::path streamWrapperTempPath_;
     std::atomic<bool> playInterruptRequested_{ false };
+    mutable std::mutex pendingPositionMutex_{};
+    PendingPositionSample pendingPositionSample_{};
+    std::atomic<bool> pendingPositionDirty_{ false };
     bool sessionStateDirty_{ false };
     std::chrono::steady_clock::time_point lastSessionSaveTime_{};
 };

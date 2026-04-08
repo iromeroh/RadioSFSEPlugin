@@ -1400,6 +1400,54 @@ bool RadioEngine::changePlaylist(const std::string& channelName, std::uint64_t d
     });
 }
 
+bool RadioEngine::changePlaylistAsync(
+    const std::string& channelName,
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this, channelName]() {
+        if (config_.autoRescanOnChangePlaylist) {
+            scanLibraryLocked();
+        }
+
+        const auto channel = lookupChannelLocked(channelName);
+        if (!channel.has_value()) {
+            logger_.warn("change_playlist failed. Channel not found: " + channelName);
+            return false;
+        }
+
+        mediaType_ = channel->isStream ? 3 : (channel->type == ChannelType::Station ? 2 : 1);
+        selectedKey_ = channel->key;
+        mode_ = PlaybackMode::None;
+        state_ = PlaybackState::Stopped;
+        resumePositionMs_ = 0;
+        songIndex_ = 0;
+        transitionIndex_ = 0;
+        adIndex_ = 0;
+        songsSinceAd_ = 0;
+        previousWasSong_ = false;
+        resetShuffleHistoryLocked();
+        currentTrackPath_.clear();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
+        panControlsAvailable_ = true;
+        panUnavailableLogged_ = false;
+        trackStartValid_ = false;
+
+        stopPlaybackDeviceLocked(true);
+        std::string sourceType = "playlist";
+        if (channel->isStream) {
+            sourceType = "stream";
+        } else if (channel->type == ChannelType::Station) {
+            sourceType = "station";
+        }
+        logger_.info("change_playlist selected: " + channel->displayName + " (" + sourceType + ")");
+        return true;
+    }, completion);
+}
+
 bool RadioEngine::play(std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this]() {
@@ -1448,6 +1496,31 @@ bool RadioEngine::start(std::uint64_t deviceId)
     });
 }
 
+bool RadioEngine::startAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        if (selectedKey_.empty()) {
+            logger_.warn("start failed. No channel selected.");
+            return false;
+        }
+
+        const auto channelIt = channels_.find(selectedKey_);
+        if (channelIt == channels_.end()) {
+            logger_.warn("start failed. Selected channel no longer exists.");
+            return false;
+        }
+
+        if (channelIt->second.type != ChannelType::Station) {
+            logger_.warn("start requested for a playlist channel. Use play.");
+            return false;
+        }
+
+        return startCurrentLocked(PlaybackMode::Station, true);
+    }, completion);
+}
+
 bool RadioEngine::pause(std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this]() {
@@ -1482,12 +1555,51 @@ bool RadioEngine::stop(std::uint64_t deviceId)
     });
 }
 
+bool RadioEngine::stopAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        stopPlaybackDeviceLocked(true);
+        state_ = PlaybackState::Stopped;
+        mode_ = PlaybackMode::None;
+        resumePositionMs_ = 0;
+        songIndex_ = 0;
+        transitionIndex_ = 0;
+        adIndex_ = 0;
+        songsSinceAd_ = 0;
+        previousWasSong_ = false;
+        resetShuffleHistoryLocked();
+        currentTrackPath_.clear();
+        lastVolume_ = -1;
+        lastLeftVolume_ = -1;
+        lastRightVolume_ = -1;
+        panControlsAvailable_ = true;
+        panUnavailableLogged_ = false;
+        trackStartValid_ = false;
+
+        logger_.info("stop executed. Playback reset to beginning.");
+        return true;
+    }, completion);
+}
+
 bool RadioEngine::forward(std::uint64_t deviceId)
 {
     requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this]() {
         return forwardLocked();
     });
+}
+
+bool RadioEngine::forwardAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        return forwardLocked();
+    }, completion);
 }
 
 bool RadioEngine::rewind(std::uint64_t deviceId)
@@ -1498,12 +1610,32 @@ bool RadioEngine::rewind(std::uint64_t deviceId)
     });
 }
 
+bool RadioEngine::rewindAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        return rewindLocked();
+    }, completion);
+}
+
 bool RadioEngine::previous(std::uint64_t deviceId)
 {
     requestPlayInterrupt(deviceId);
     return runBoolCommandForDevice(deviceId, [this]() {
         return previousLocked();
     });
+}
+
+bool RadioEngine::previousAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        return previousLocked();
+    }, completion);
 }
 
 bool RadioEngine::rescanLibrary(std::uint64_t deviceId)
@@ -1735,13 +1867,40 @@ bool RadioEngine::setPositions(
     float playerYawDeg,
     std::uint64_t deviceId)
 {
-    return runBoolCommandForDevice(deviceId, [this, emitterX, emitterY, emitterZ, playerX, playerY, playerZ, playerYawDeg]() {
+    bool workerActive = false;
+    if (mutex_.try_lock()) {
+        workerActive = workerRunning_;
+        mutex_.unlock();
+    }
+
+    if (!workerActive) {
+        if (!mutex_.try_lock()) {
+            return true;
+        }
+
+        switchToDeviceLocked(deviceId);
         emitterPosition_ = Position{ emitterX, emitterY, emitterZ };
         playerPosition_ = Position{ playerX, playerY, playerZ };
         playerYawDeg_ = playerYawDeg;
         updateFadeVolumeLocked();
+        syncCurrentDeviceStateLocked();
+        (void)maybeFlushPersistentSessionLocked();
+        mutex_.unlock();
         return true;
-    });
+    }
+
+    if (!pendingPositionMutex_.try_lock()) {
+        return true;
+    }
+    pendingPositionSample_.deviceId = deviceId;
+    pendingPositionSample_.emitter = Position{ emitterX, emitterY, emitterZ };
+    pendingPositionSample_.player = Position{ playerX, playerY, playerZ };
+    pendingPositionSample_.playerYawDeg = playerYawDeg;
+    pendingPositionDirty_.store(true, std::memory_order_release);
+    pendingPositionMutex_.unlock();
+
+    cv_.notify_all();
+    return true;
 }
 
 bool RadioEngine::setFadeParams(float minDistance, float maxDistance, float panDistance, std::uint64_t deviceId)
@@ -2023,6 +2182,81 @@ bool RadioEngine::setTrack(const std::string& trackBasename, std::uint64_t devic
     });
 }
 
+bool RadioEngine::setTrackAsync(
+    const std::string& trackBasename,
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    requestPlayInterrupt(deviceId);
+    return runAsyncCommandForDevice(deviceId, [this, trackBasename]() {
+        if (selectedKey_.empty()) {
+            logger_.warn("setTrack failed. No source selected.");
+            return false;
+        }
+
+        const auto channelIt = channels_.find(selectedKey_);
+        if (channelIt == channels_.end()) {
+            logger_.warn("setTrack failed. Selected source no longer exists.");
+            return false;
+        }
+
+        const auto& channel = channelIt->second;
+        if (channel.isStream) {
+            logger_.warn("setTrack failed. Streaming source has no local track list.");
+            return false;
+        }
+
+        const std::string needle = toLower(trim(trackBasename));
+        if (needle.empty()) {
+            logger_.warn("setTrack failed. Empty track basename.");
+            return false;
+        }
+
+        std::size_t foundIndex = channel.songs.size();
+        for (std::size_t i = 0; i < channel.songs.size(); ++i) {
+            const std::string fileNameLower = toLower(pathToUtf8(channel.songs[i].filename()));
+            const std::string stemLower = toLower(pathToUtf8(channel.songs[i].stem()));
+            if (needle == fileNameLower || needle == stemLower) {
+                foundIndex = i;
+                break;
+            }
+        }
+
+        if (foundIndex >= channel.songs.size()) {
+            logger_.warn("setTrack failed. Track not found in selected source: " + trackBasename);
+            return false;
+        }
+
+        const bool wasPlaying = state_ == PlaybackState::Playing;
+        if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+            stopPlaybackDeviceLocked(true);
+            state_ = PlaybackState::Stopped;
+            trackStartValid_ = false;
+            lastVolume_ = -1;
+            lastLeftVolume_ = -1;
+            lastRightVolume_ = -1;
+        }
+
+        songIndex_ = foundIndex;
+        currentTrackPath_ = channel.songs[foundIndex];
+        resumePositionMs_ = 0;
+        mode_ = channel.type == ChannelType::Station ? PlaybackMode::Station : PlaybackMode::Playlist;
+        previousWasSong_ = true;
+        resetShuffleHistoryLocked();
+        shuffleHistory_.push_back(foundIndex);
+        shuffleCursor_ = 0;
+
+        logger_.info("setTrack selected: " + pathToUtf8(currentTrackPath_.filename()) +
+                     " (index=" + std::to_string(foundIndex) + ")");
+
+        if (!wasPlaying) {
+            return true;
+        }
+
+        return playPathLocked(currentTrackPath_);
+    }, completion);
+}
+
 bool RadioEngine::playFx(const std::string& fxBasename, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, fxBasename]() {
@@ -2035,12 +2269,37 @@ bool RadioEngine::playFx(const std::string& fxBasename, std::uint64_t deviceId)
     });
 }
 
+bool RadioEngine::playFxAsync(
+    const std::string& fxBasename,
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    return runAsyncCommandForDevice(deviceId, [this, fxBasename]() {
+        const auto fxPath = findFxPathLocked(fxBasename);
+        if (!fxPath.has_value()) {
+            logger_.warn("playFx failed. FX file not found: " + fxBasename);
+            return false;
+        }
+        return playFxLocked(*fxPath);
+    }, completion);
+}
+
 bool RadioEngine::stopFx(std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this]() {
         stopFxLocked();
         return true;
     });
+}
+
+bool RadioEngine::stopFxAsync(
+    std::uint64_t deviceId,
+    const std::function<void(bool result)>& completion)
+{
+    return runAsyncCommandForDevice(deviceId, [this]() {
+        stopFxLocked();
+        return true;
+    }, completion);
 }
 
 void RadioEngine::requestPlayInterrupt(std::uint64_t)
@@ -4517,6 +4776,41 @@ void RadioEngine::switchToDeviceLocked(std::uint64_t deviceId)
     }
 }
 
+bool RadioEngine::applyPendingPositionSampleLocked()
+{
+    if (!pendingPositionDirty_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    PendingPositionSample sample;
+    {
+        std::lock_guard<std::mutex> pendingLock(pendingPositionMutex_);
+        if (!pendingPositionDirty_.load(std::memory_order_relaxed)) {
+            return false;
+        }
+
+        sample = pendingPositionSample_;
+        pendingPositionDirty_.store(false, std::memory_order_release);
+    }
+
+    DeviceState& device = ensureDeviceStateLocked(sample.deviceId);
+    device.emitterPosition = sample.emitter;
+    device.playerPosition = sample.player;
+    device.playerYawDeg = sample.playerYawDeg;
+
+    if (sample.deviceId != currentDeviceId_) {
+        return false;
+    }
+
+    emitterPosition_ = sample.emitter;
+    playerPosition_ = sample.player;
+    playerYawDeg_ = sample.playerYawDeg;
+    if (state_ == PlaybackState::Playing) {
+        updateFadeVolumeLocked();
+    }
+    return true;
+}
+
 bool RadioEngine::runAsyncCommandForDevice(
     std::uint64_t deviceId,
     const std::function<bool()>& command,
@@ -4526,6 +4820,7 @@ bool RadioEngine::runAsyncCommandForDevice(
 
     if (!workerRunning_ || std::this_thread::get_id() == workerThreadId_) {
         switchToDeviceLocked(deviceId);
+        clearPlayInterruptRequest();
         bool result = false;
         try {
             result = command();
@@ -4538,6 +4833,7 @@ bool RadioEngine::runAsyncCommandForDevice(
         }
         syncCurrentDeviceStateLocked();
         (void)maybeFlushPersistentSessionLocked();
+        lock.unlock();
         if (completion) {
             completion(result);
         }
@@ -4546,24 +4842,29 @@ bool RadioEngine::runAsyncCommandForDevice(
 
     commandQueue_.emplace_back([this, command, completion, deviceId]() {
         bool result = false;
-        try {
-            switchToDeviceLocked(deviceId);
-            result = command();
-        } catch (const std::exception& ex) {
-            result = false;
-            logger_.error(std::string("Unhandled exception in queued async command: ") + ex.what());
-        } catch (...) {
-            result = false;
-            logger_.error("Unhandled unknown exception in queued async command.");
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            try {
+                switchToDeviceLocked(deviceId);
+                clearPlayInterruptRequest();
+                result = command();
+            } catch (const std::exception& ex) {
+                result = false;
+                logger_.error(std::string("Unhandled exception in queued async command: ") + ex.what());
+            } catch (...) {
+                result = false;
+                logger_.error("Unhandled unknown exception in queued async command.");
+            }
+            syncCurrentDeviceStateLocked();
+            (void)maybeFlushPersistentSessionLocked();
         }
-        syncCurrentDeviceStateLocked();
-        (void)maybeFlushPersistentSessionLocked();
         if (completion) {
             completion(result);
         }
         cv_.notify_all();
     });
 
+    lock.unlock();
     cv_.notify_all();
     return true;
 }
@@ -4598,24 +4899,29 @@ bool RadioEngine::runBoolCommandForDevice(std::uint64_t deviceId, const std::fun
 
     auto pending = std::make_shared<PendingResult>();
     commandQueue_.emplace_back([this, command, pending, deviceId]() {
-        try {
-            switchToDeviceLocked(deviceId);
-            clearPlayInterruptRequest();
-            pending->result = command();
-        } catch (const std::exception& ex) {
-            pending->result = false;
-            logger_.error(std::string("Unhandled exception in queued command: ") + ex.what());
-        } catch (...) {
-            pending->result = false;
-            logger_.error("Unhandled unknown exception in queued command.");
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            try {
+                switchToDeviceLocked(deviceId);
+                clearPlayInterruptRequest();
+                pending->result = command();
+            } catch (const std::exception& ex) {
+                pending->result = false;
+                logger_.error(std::string("Unhandled exception in queued command: ") + ex.what());
+            } catch (...) {
+                pending->result = false;
+                logger_.error("Unhandled unknown exception in queued command.");
+            }
+            syncCurrentDeviceStateLocked();
+            (void)maybeFlushPersistentSessionLocked();
+            pending->done = true;
         }
-        syncCurrentDeviceStateLocked();
-        (void)maybeFlushPersistentSessionLocked();
-        pending->done = true;
         cv_.notify_all();
     });
 
+    lock.unlock();
     cv_.notify_all();
+    lock.lock();
     const bool completed = cv_.wait_for(lock, kCommandWaitTimeout, [this, pending]() {
         return pending->done || !workerRunning_;
     });
@@ -4636,7 +4942,9 @@ void RadioEngine::workerLoop()
     workerThreadId_ = std::this_thread::get_id();
     while (!stopWorker_) {
         cv_.wait_for(lock, std::chrono::milliseconds(100), [this]() {
-            return stopWorker_ || !commandQueue_.empty();
+            return stopWorker_ ||
+                   !commandQueue_.empty() ||
+                   pendingPositionDirty_.load(std::memory_order_acquire);
         });
         if (stopWorker_) {
             break;
@@ -4645,9 +4953,9 @@ void RadioEngine::workerLoop()
         while (!commandQueue_.empty()) {
             auto command = std::move(commandQueue_.front());
             commandQueue_.pop_front();
+            lock.unlock();
             command();
-            syncCurrentDeviceStateLocked();
-            (void)maybeFlushPersistentSessionLocked();
+            lock.lock();
             if (stopWorker_) {
                 break;
             }
@@ -4656,10 +4964,11 @@ void RadioEngine::workerLoop()
             break;
         }
 
+        const bool updatedCurrentPosition = applyPendingPositionSampleLocked();
         if (state_ == PlaybackState::Playing) {
             if (isTrackCompleteLocked()) {
                 (void)updateTrackLocked(true);
-            } else {
+            } else if (!updatedCurrentPosition) {
                 updateFadeVolumeLocked();
             }
             syncCurrentDeviceStateLocked();
