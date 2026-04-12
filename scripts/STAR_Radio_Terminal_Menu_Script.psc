@@ -188,11 +188,15 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 
 		String sourceName = mgr.RadioCurrentSourceName(akTerminalRef)
 		if sourceName == ""
-			String err0 = mgr.RadioLastError(akTerminalRef)
-			if err0 == ""
-				err0 = "Could not change media type."
+			if mgr.RadioGetMediaType(akTerminalRef) == mediaType
+				Notify("Media type " + mediaType + " selected. No sources found.", true)
+			else
+				String err0 = mgr.RadioLastError(akTerminalRef)
+				if err0 == ""
+					err0 = "Could not change media type."
+				endif
+				Notify(err0, true)
 			endif
-			Notify(err0, true)
 		else
 			Notify("Media type " + mediaType + ": " + sourceName, true)
 		endif

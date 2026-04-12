@@ -154,11 +154,15 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
 		endif
 
         if sourceName == ""
-            String err0 = mgr.RadioLastError(emitterRef)
-            if err0 == ""
-                err0 = "Could not change media type."
+            if mgr.RadioGetMediaType(emitterRef) == mediaType
+                Notify("Media type "+mediaType+" selected. No sources found.", true)
+            else
+                String err0 = mgr.RadioLastError(emitterRef)
+                if err0 == ""
+                    err0 = "Could not change media type."
+                endif
+                Notify(err0, true)
             endif
-            Notify(err0, true)
         else
             Notify("Media type "+mediaType+": "+sourceName, True)
         endif

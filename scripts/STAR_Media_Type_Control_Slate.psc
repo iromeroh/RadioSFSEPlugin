@@ -67,7 +67,19 @@ Event OnRead()
     Notify("Setting media type to: "+mediaType)
 
     String mediaName = mgr.RadioCurrentSourceName(emitterRef)
-    Notify("Selected media: "+mediaName)
+    if mediaName == ""
+        if mgr.RadioGetMediaType(emitterRef) == mediaType
+            Notify("No sources found for media type "+mediaType+".", true)
+        else
+            String err0 = mgr.RadioLastError(emitterRef)
+            if err0 == ""
+                err0 = "Could not change media type."
+            endif
+            Notify(err0, true)
+        endif
+    else
+        Notify("Selected media: "+mediaName)
+    endif
     Notify("Press Play to start.")
 
 

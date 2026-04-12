@@ -1708,22 +1708,7 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
             return false;
         }
 
-        if (candidates.empty()) {
-            logger_.warn("changeToNextSource failed. No sources for category: " + std::to_string(category));
-            return false;
-        }
-
-        std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
-            return toLower(a.displayName) < toLower(b.displayName);
-        });
-
-        const auto channelIt = channels_.find(candidates.front().key);
-        if (channelIt == channels_.end()) {
-            return false;
-        }
-
         mediaType_ = std::clamp(category, 1, 3);
-        selectedKey_ = channelIt->first;
         mode_ = PlaybackMode::None;
         state_ = PlaybackState::Stopped;
         resumePositionMs_ = 0;
@@ -1742,6 +1727,24 @@ bool RadioEngine::changeToNextSource(int category, std::uint64_t deviceId)
         trackStartValid_ = false;
 
         stopPlaybackDeviceLocked(true);
+
+        if (candidates.empty()) {
+            selectedKey_.clear();
+            logger_.info("changeToNextSource selected empty category=" + std::to_string(category) +
+                         ". Playback stopped; waiting for a source to be added.");
+            return true;
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [this](const Candidate& a, const Candidate& b) {
+            return toLower(a.displayName) < toLower(b.displayName);
+        });
+
+        const auto channelIt = channels_.find(candidates.front().key);
+        if (channelIt == channels_.end()) {
+            return false;
+        }
+
+        selectedKey_ = channelIt->first;
 
         std::string sourceType = "playlist";
         if (channelIt->second.isStream) {

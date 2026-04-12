@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RadioSFSENative Modder Guide</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f1e8;
+      --panel: #fffaf2;
+      --text: #201a12;
+      --muted: #6f6558;
+      --border: #d7c7b2;
+      --accent: #9f4f1f;
+      --code-bg: #2a241d;
+      --code-text: #f7ead8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17130f;
+        --panel: #211b15;
+        --text: #f4eadf;
+        --muted: #c2b29d;
+        --border: #4e4032;
+        --accent: #ff9c5b;
+        --code-bg: #0f0c09;
+        --code-text: #f7ead8;
+      }
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: linear-gradient(180deg, var(--bg), color-mix(in srgb, var(--bg) 82%, black 18%));
+      color: var(--text);
+      line-height: 1.6;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 48px 24px 72px;
+    }
+    article {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 40px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+    }
+    h1, h2, h3, h4 {
+      line-height: 1.2;
+      margin-top: 1.5em;
+      margin-bottom: 0.5em;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: clamp(2rem, 4vw, 3rem);
+      letter-spacing: -0.03em;
+    }
+    h2 {
+      font-size: clamp(1.45rem, 2.6vw, 2rem);
+      border-top: 1px solid var(--border);
+      padding-top: 1em;
+    }
+    h3 {
+      font-size: 1.2rem;
+    }
+    p, li {
+      font-size: 1.03rem;
+    }
+    a {
+      color: var(--accent);
+    }
+    code {
+      font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+      font-size: 0.95em;
+    }
+    p code, li code, td code {
+      background: color-mix(in srgb, var(--panel) 72%, var(--border) 28%);
+      padding: 0.12rem 0.35rem;
+      border-radius: 0.35rem;
+    }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 18px;
+      border-radius: 14px;
+      overflow-x: auto;
+      border: 1px solid color-mix(in srgb, var(--code-bg) 80%, white 20%);
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      color: inherit;
+    }
+    ul, ol {
+      padding-left: 1.5rem;
+    }
+    hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 2rem 0;
+    }
+    blockquote {
+      margin: 1rem 0;
+      padding: 0.1rem 1rem;
+      border-left: 4px solid var(--accent);
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      main {
+        padding: 18px 12px 32px;
+      }
+      article {
+        padding: 22px 18px;
+        border-radius: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+<h1>RadioSFSENative Modder Guide</h1>
+<p>This document explains how to call <code>RadioSFSENative.psc</code> from third-party Starfield mods.</p>
+<p>It is aimed at mod authors who want to:</p>
+<ul>
+<li>control RadioSFSE playback from their own Papyrus scripts</li>
+<li>switch playlists, stations, and streams</li>
+<li>query playback state</li>
+<li>apply volume and fade controls</li>
+<li>drive positional audio from their own placed emitter</li>
+</ul>
+<h2>What <code>RadioSFSENative</code> Is</h2>
+<p><code>RadioSFSENative.psc</code> is the Papyrus native interface exposed by the <code>RadioSFSE.dll</code> SFSE plugin.</p>
+<p>Source file:</p>
+<pre><code class="language-psc">Scriptname RadioSFSENative Hidden Native
+
+; Native API surface bound by RadioSFSE.
+
+Function change_playlist(ObjectReference activatorRef, String channelName) Global Native
+Function play(ObjectReference activatorRef) Global Native
+Function start(ObjectReference activatorRef) Global Native
+Function pause(ObjectReference activatorRef) Global Native
+Function stop(ObjectReference activatorRef) Global Native
+Function forward(ObjectReference activatorRef) Global Native
+Function rewind(ObjectReference activatorRef) Global Native
+Function previous(ObjectReference activatorRef) Global Native
+Bool Function pluginAvailable(ObjectReference activatorRef) Global Native
+Bool Function isPlaying(ObjectReference activatorRef) Global Native
+String Function currentSourceName(ObjectReference activatorRef) Global Native
+String Function currentTrackBasename(ObjectReference activatorRef) Global Native
+Bool Function changeToNextSource(ObjectReference activatorRef, Int category) Global Native
+Bool Function selectNextSource(ObjectReference activatorRef, Int category) Global Native
+Bool Function setFadeParams(ObjectReference activatorRef, Float minDistance, Float maxDistance, Float panDistance) Global Native
+Bool Function volumeUp(ObjectReference activatorRef, Float step) Global Native
+Bool Function volumeDown(ObjectReference activatorRef, Float step) Global Native
+Float Function getVolume(ObjectReference activatorRef) Global Native
+Int Function getMediaType(ObjectReference activatorRef) Global Native
+Int Function getPlayMode(ObjectReference activatorRef) Global Native
+Float Function getVolumeStepPercent(ObjectReference activatorRef) Global Native
+Int Function getDebugVerbosity(ObjectReference activatorRef) Global Native
+Bool Function setVolume(ObjectReference activatorRef, Float vol) Global Native
+Bool Function setPlayMode(ObjectReference activatorRef, Int playMode) Global Native
+String Function getTrack(ObjectReference activatorRef) Global Native
+Bool Function setTrack(ObjectReference activatorRef, String trackBasename) Global Native
+Bool Function playFx(ObjectReference activatorRef, String fxBasename) Global Native
+Bool Function stopFx(ObjectReference activatorRef) Global Native
+String Function lastError(ObjectReference activatorRef) Global Native
+
+; Activator/player positional data feed for fade calculations.
+Function set_positions(ObjectReference activatorRef, Float activatorX, Float activatorY, Float activatorZ, Float playerX, Float playerY, Float playerZ, Float playerYawDeg) Global Native
+</code></pre>
+<p>The native script is <code>Hidden Native</code>, so you do not attach it to an object. You call its <code>Global Native</code> functions directly from your own scripts.</p>
+<h2>Requirements</h2>
+<p>Your users need all of the following:</p>
+<ul>
+<li><code>SFSE</code></li>
+<li><code>Data/SFSE/Plugins/RadioSFSE.dll</code></li>
+<li><code>Data/SFSE/Plugins/RadioSFSE.ini</code></li>
+<li>a populated <code>Data/Radio</code> library or configured stream stations</li>
+</ul>
+<p>At compile time, your mod also needs access to <code>RadioSFSENative.psc</code> in a Papyrus source path.</p>
+<h2>Basic Usage Pattern</h2>
+<ol>
+<li>Choose a reference to act as the radio emitter.</li>
+<li>Probe native availability with <code>pluginAvailable(ref)</code>.</li>
+<li>Select a source or category.</li>
+<li>Start playback.</li>
+<li>Poll <code>isPlaying(ref)</code> and <code>lastError(ref)</code> when you need confirmation.</li>
+<li>If you use 3D-ish fade/pan behavior, keep feeding <code>set_positions(...)</code>.</li>
+</ol>
+<p>Minimal example:</p>
+<pre><code class="language-psc">Scriptname MyRadioController extends Quest
+
+ObjectReference Property MyEmitter Auto Mandatory
+
+Bool Function EnsureRadioReady()
+    if MyEmitter == None
+        Debug.Trace(&quot;MyRadioController: missing emitter&quot;)
+        return false
+    endif
+
+    if !RadioSFSENative.pluginAvailable(MyEmitter)
+        Debug.Trace(&quot;MyRadioController: RadioSFSE not available&quot;)
+        return false
+    endif
+
+    return true
+EndFunction
+
+Function StartMyStation()
+    if !EnsureRadioReady()
+        return
+    endif
+
+    RadioSFSENative.change_playlist(MyEmitter, &quot;Stations/My Custom Station&quot;)
+    Utility.Wait(0.25)
+
+    RadioSFSENative.play(MyEmitter)
+EndFunction
+</code></pre>
+<h2>Important Behavior Notes</h2>
+<h3>1. The <code>activatorRef</code> matters</h3>
+<p>Most functions take an <code>ObjectReference activatorRef</code>.</p>
+<p>Pass a real reference:</p>
+<ul>
+<li>a placed activator</li>
+<li>a terminal</li>
+<li>a persistent marker</li>
+<li>the player, if that is your intended radio device</li>
+</ul>
+<p>Do not pass <code>None</code> unless you are prepared for default/fallback behavior.</p>
+<h3>2. Current build uses a shared device key</h3>
+<p>At the native bridge level, all non-<code>None</code> refs currently map to one shared radio device, not true isolated per-ref playback.</p>
+<p>Practical consequence:</p>
+<ul>
+<li>use one controlling emitter per system</li>
+<li>do not assume two different refs can play independently at the same time</li>
+<li>still pass a stable ref consistently, because duplicate-command suppression is keyed by command name plus ref pointer</li>
+</ul>
+<h3>3. Some commands are asynchronous</h3>
+<p>These queue work and return immediately:</p>
+<ul>
+<li><code>change_playlist</code></li>
+<li><code>play</code></li>
+<li><code>start</code></li>
+<li><code>stop</code></li>
+<li><code>forward</code></li>
+<li><code>rewind</code></li>
+<li><code>previous</code></li>
+<li><code>setTrack</code></li>
+<li><code>playFx</code></li>
+<li><code>stopFx</code></li>
+</ul>
+<p>For those calls:</p>
+<ul>
+<li>no immediate success means playback succeeded</li>
+<li>check <code>isPlaying(ref)</code>, <code>currentTrackBasename(ref)</code>, and <code>lastError(ref)</code> after a short wait</li>
+</ul>
+<h3>4. Duplicate commands are debounced</h3>
+<p>The bridge ignores the same command sent to the same ref within about <code>200 ms</code>.</p>
+<p>If you intentionally chain commands, insert a short wait:</p>
+<pre><code class="language-psc">Utility.Wait(0.25)
+</code></pre>
+<h3>5. Empty categories are valid now</h3>
+<p><code>changeToNextSource(ref, category)</code> can now succeed even when that category has no selectable source yet.</p>
+<p>That means:</p>
+<ul>
+<li>the media type can still change</li>
+<li><code>currentSourceName(ref)</code> may remain empty</li>
+<li><code>play(ref)</code> will still fail until a source exists</li>
+</ul>
+<p>This is intentional and useful for fresh installs.</p>
+<h2>Categories and Modes</h2>
+<p>Media type categories used by <code>changeToNextSource</code> and <code>selectNextSource</code>:</p>
+<ul>
+<li><code>1</code> = local playlists from <code>Data/Radio/Playlists/&lt;Name&gt;</code></li>
+<li><code>2</code> = local stations from <code>Data/Radio/Stations/&lt;Name&gt;</code></li>
+<li><code>3</code> = stream stations from <code>RadioSFSE.ini</code></li>
+</ul>
+<p>Play mode values used by <code>getPlayMode</code> and <code>setPlayMode</code>:</p>
+<ul>
+<li><code>1</code> = alphabetical</li>
+<li><code>2</code> = shuffle</li>
+</ul>
+<p>Volume values:</p>
+<ul>
+<li><code>0.0</code> to <code>200.0</code></li>
+<li><code>100.0</code> is normal/default</li>
+</ul>
+<h2>Source Selection API</h2>
+<h3><code>change_playlist(ref, channelName)</code></h3>
+<p>Selects a source by name/path. This is the most direct way to target a specific playlist or station.</p>
+<p>Accepted forms are forgiving. These are the safest:</p>
+<ul>
+<li><code>&quot;Playlists/My Playlist&quot;</code></li>
+<li><code>&quot;Stations/My Station&quot;</code></li>
+<li><code>&quot;stream/my stream name&quot;</code> is not recommended; prefer category-based stream cycling unless you know the exact configured name</li>
+</ul>
+<p>Because this call is async, wait briefly before checking the result.</p>
+<p>Example:</p>
+<pre><code class="language-psc">Function SelectSpecificSource(ObjectReference ref, String sourceName)
+    RadioSFSENative.change_playlist(ref, sourceName)
+    Utility.Wait(0.25)
+
+    String err = RadioSFSENative.lastError(ref)
+    if err != &quot;&quot;
+        Debug.Trace(&quot;Radio select failed: &quot; + err)
+        return
+    endif
+
+    Debug.Trace(&quot;Radio source: &quot; + RadioSFSENative.currentSourceName(ref))
+EndFunction
+</code></pre>
+<h3><code>changeToNextSource(ref, category)</code></h3>
+<p>Selects the first source in a category and switches media type.</p>
+<p>Returns:</p>
+<ul>
+<li><code>true</code> if the category switch succeeded</li>
+<li><code>false</code> only if the category is invalid or the command failed</li>
+</ul>
+<p>Note:</p>
+<ul>
+<li>for an empty category, this may still return <code>true</code></li>
+<li><code>currentSourceName(ref)</code> can be empty after success</li>
+</ul>
+<h3><code>selectNextSource(ref, category)</code></h3>
+<p>Cycles to the next source inside a category.</p>
+<p>Use this for “next station” or “next playlist” UI buttons.</p>
+<p>Returns:</p>
+<ul>
+<li><code>true</code> if a next source was selected</li>
+<li><code>false</code> if there are no sources in that category or selection failed</li>
+</ul>
+<h2>Playback API</h2>
+<h3><code>play(ref)</code></h3>
+<p>Starts playback of the currently selected source, or resumes if paused.</p>
+<p>This is the usual call for UI “Play” behavior.</p>
+<h3><code>start(ref)</code></h3>
+<p>Also starts playback. In practice you can treat <code>play</code> and <code>start</code> similarly unless you are matching an existing UI flow that already uses one or the other.</p>
+<h3><code>pause(ref)</code></h3>
+<p>Pauses playback immediately.</p>
+<h3><code>stop(ref)</code></h3>
+<p>Stops playback asynchronously.</p>
+<h3><code>forward(ref)</code>, <code>rewind(ref)</code>, <code>previous(ref)</code></h3>
+<p>Track navigation commands.</p>
+<p>For stream stations, behavior is constrained by the stream backend. Do not assume full track-like navigation for streams.</p>
+<h3>Playback confirmation pattern</h3>
+<pre><code class="language-psc">Bool Function WaitForPlayback(ObjectReference ref, Float timeoutSeconds = 6.0)
+    Float elapsed = 0.0
+    while elapsed &lt; timeoutSeconds
+        if RadioSFSENative.isPlaying(ref)
+            return true
+        endif
+
+        String err = RadioSFSENative.lastError(ref)
+        if err != &quot;&quot;
+            Debug.Trace(&quot;Radio playback failed: &quot; + err)
+            return false
+        endif
+
+        Utility.Wait(0.25)
+        elapsed += 0.25
+    endwhile
+
+    return RadioSFSENative.isPlaying(ref)
+EndFunction
+</code></pre>
+<h2>Query API</h2>
+<h3><code>pluginAvailable(ref)</code></h3>
+<p>Returns <code>true</code> when the native interface is callable.</p>
+<p>Use this before your first real command.</p>
+<h3><code>isPlaying(ref)</code></h3>
+<p>Returns current playback state.</p>
+<h3><code>currentSourceName(ref)</code></h3>
+<p>Returns the display name of the selected source.</p>
+<p>Can be empty when:</p>
+<ul>
+<li>nothing is selected</li>
+<li>the selected category is empty</li>
+<li>a command has not finished yet</li>
+</ul>
+<h3><code>currentTrackBasename(ref)</code></h3>
+<p>Returns the current track filename only while playing or paused.</p>
+<p>If stopped, it returns an empty string.</p>
+<h3><code>getTrack(ref)</code></h3>
+<p>Returns the selected/current local track basename, even outside some UI flows.</p>
+<p>Special case:</p>
+<ul>
+<li>for streams it returns <code>&quot;na&quot;</code></li>
+</ul>
+<h3><code>getMediaType(ref)</code></h3>
+<p>Returns the current media type:</p>
+<ul>
+<li><code>1</code></li>
+<li><code>2</code></li>
+<li><code>3</code></li>
+</ul>
+<h3><code>lastError(ref)</code></h3>
+<p>Returns the last error string for that device context, or <code>&quot;&quot;</code> if there is no current error.</p>
+<p>This is your main diagnostic surface from Papyrus.</p>
+<h2>Volume and Play Mode API</h2>
+<h3><code>getVolume(ref)</code> / <code>setVolume(ref, volume)</code></h3>
+<p>Gets or sets volume in percent.</p>
+<p>Recommended range:</p>
+<ul>
+<li><code>0.0</code> to <code>200.0</code></li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-psc">Function SetHalfVolume(ObjectReference ref)
+    if !RadioSFSENative.setVolume(ref, 50.0)
+        Debug.Trace(&quot;setVolume failed: &quot; + RadioSFSENative.lastError(ref))
+    endif
+EndFunction
+</code></pre>
+<h3><code>volumeUp(ref, step)</code> / <code>volumeDown(ref, step)</code></h3>
+<p>Adjust relative volume by <code>step</code> percent.</p>
+<p>If <code>step &lt;= 0</code>, the native layer falls back to its default step.</p>
+<h3><code>getVolumeStepPercent(ref)</code></h3>
+<p>Returns the configured UI step from the INI.</p>
+<p>Useful if you want your own menu to match the plugin's configured increment.</p>
+<h3><code>getPlayMode(ref)</code> / <code>setPlayMode(ref, playMode)</code></h3>
+<p>Use:</p>
+<ul>
+<li><code>1</code> for alphabetical</li>
+<li><code>2</code> for shuffle</li>
+</ul>
+<p>Any non-<code>2</code> value currently resolves to alphabetical.</p>
+<h2>Track API</h2>
+<h3><code>setTrack(ref, trackBasename)</code></h3>
+<p>Queues a direct track selection inside the currently selected local playlist/station.</p>
+<p>Returns:</p>
+<ul>
+<li><code>true</code> if the request was queued</li>
+<li><code>false</code> if queueing failed immediately</li>
+</ul>
+<p>Important:</p>
+<ul>
+<li>this is not final playback success</li>
+<li>the source must already be selected</li>
+<li>the source cannot be a stream</li>
+<li>the track is matched by filename or stem, case-insensitive</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-psc">Function PlaySpecificTrack(ObjectReference ref, String sourceName, String trackName)
+    RadioSFSENative.change_playlist(ref, sourceName)
+    Utility.Wait(0.25)
+
+    if !RadioSFSENative.setTrack(ref, trackName)
+        Debug.Trace(&quot;setTrack queue failed: &quot; + RadioSFSENative.lastError(ref))
+        return
+    endif
+
+    Utility.Wait(0.25)
+    RadioSFSENative.play(ref)
+EndFunction
+</code></pre>
+<h2>FX API</h2>
+<h3><code>playFx(ref, fxBasename)</code></h3>
+<p>Plays a one-shot FX file from <code>Data/Radio/FX</code>.</p>
+<p>FX matching is case-insensitive and works with either:</p>
+<ul>
+<li>full filename, for example <code>&quot;tuning_short.mp3&quot;</code></li>
+<li>stem only, for example <code>&quot;tuning_short&quot;</code></li>
+</ul>
+<p>Returns:</p>
+<ul>
+<li><code>true</code> if the command was queued</li>
+<li><code>false</code> if queueing failed immediately</li>
+</ul>
+<h3><code>stopFx(ref)</code></h3>
+<p>Stops currently playing FX.</p>
+<h2>Positional Audio API</h2>
+<h3><code>setFadeParams(ref, minDistance, maxDistance, panDistance)</code></h3>
+<p>Overrides fade/pan distances for the current device.</p>
+<p>Rules:</p>
+<ul>
+<li>any negative parameter resets that ref to global INI defaults</li>
+<li><code>maxDistance</code> is forced to be at least slightly larger than <code>minDistance</code></li>
+<li><code>panDistance</code> is forced to a small minimum if too small</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-psc">Function UseTightInteriorFade(ObjectReference ref)
+    RadioSFSENative.setFadeParams(ref, 1.5, 12.0, 8.0)
+EndFunction
+
+Function ResetFadeToIni(ObjectReference ref)
+    RadioSFSENative.setFadeParams(ref, -1.0, -1.0, -1.0)
+EndFunction
+</code></pre>
+<h3><code>set_positions(ref, emitterX, emitterY, emitterZ, playerX, playerY, playerZ, playerYawDeg)</code></h3>
+<p>Feeds the plugin the emitter/player positional sample used for distance fade and stereo pan.</p>
+<p>If your mod wants moving or spatialized radio behavior, call this regularly while playback is active.</p>
+<p>Typical pattern:</p>
+<pre><code class="language-psc">Function PushPositionSample(ObjectReference ref)
+    Actor playerRef = Game.GetPlayer()
+    if ref == None || playerRef == None
+        return
+    endif
+
+    Float ex = ref.GetPositionX()
+    Float ey = ref.GetPositionY()
+    Float ez = ref.GetPositionZ()
+    Float px = playerRef.GetPositionX()
+    Float py = playerRef.GetPositionY()
+    Float pz = playerRef.GetPositionZ()
+    Float yaw = playerRef.GetAngleZ()
+
+    RadioSFSENative.set_positions(ref, ex, ey, ez, px, py, pz, yaw)
+EndFunction
+</code></pre>
+<h2>Recommended Wrapper Pattern</h2>
+<p>Do not scatter raw native calls all over your mod.</p>
+<p>Instead:</p>
+<ol>
+<li>Create one small quest script or utility script that wraps <code>RadioSFSENative</code>.</li>
+<li>Centralize waits and <code>lastError()</code> checks there.</li>
+<li>Expose your own higher-level functions like:
+<ul>
+<li><code>PlayStationByName</code></li>
+<li><code>CycleToNextStream</code></li>
+<li><code>PauseRadio</code></li>
+<li><code>ApplyInteriorFadeProfile</code></li>
+</ul>
+</li>
+</ol>
+<p>This gives you one place to handle future native changes.</p>
+<h2>Common Pitfalls</h2>
+<ul>
+<li>Calling <code>play(ref)</code> before selecting a source.</li>
+<li>Assuming <code>change_playlist()</code> completed immediately.</li>
+<li>Treating <code>setTrack()</code> returning <code>true</code> as proof that the track exists and started.</li>
+<li>Assuming different refs are isolated devices in the current build.</li>
+<li>Forgetting to poll <code>lastError(ref)</code> after async commands.</li>
+<li>Spamming the same command faster than the native debounce window.</li>
+<li>Expecting <code>currentTrackBasename(ref)</code> to return a value while stopped.</li>
+<li>Expecting <code>getTrack(ref)</code> to return a normal filename for stream stations.</li>
+</ul>
+<h2>Suggested Integration Recipes</h2>
+<h3>Recipe: Start a named station</h3>
+<pre><code class="language-psc">Function StartNamedStation(ObjectReference ref, String stationName)
+    if !RadioSFSENative.pluginAvailable(ref)
+        return
+    endif
+
+    RadioSFSENative.change_playlist(ref, &quot;Stations/&quot; + stationName)
+    Utility.Wait(0.25)
+    RadioSFSENative.play(ref)
+EndFunction
+</code></pre>
+<h3>Recipe: Switch to streaming mode</h3>
+<pre><code class="language-psc">Function SwitchToStreaming(ObjectReference ref)
+    if !RadioSFSENative.changeToNextSource(ref, 3)
+        Debug.Trace(&quot;Could not switch to stream category: &quot; + RadioSFSENative.lastError(ref))
+        return
+    endif
+
+    Utility.Wait(0.25)
+    Debug.Trace(&quot;Selected stream source: &quot; + RadioSFSENative.currentSourceName(ref))
+EndFunction
+</code></pre>
+<h3>Recipe: Cycle next source in current category and play</h3>
+<pre><code class="language-psc">Function NextStationAndPlay(ObjectReference ref, Int category)
+    if !RadioSFSENative.selectNextSource(ref, category)
+        Debug.Trace(&quot;Next source failed: &quot; + RadioSFSENative.lastError(ref))
+        return
+    endif
+
+    Utility.Wait(0.25)
+    RadioSFSENative.play(ref)
+EndFunction
+</code></pre>
+<h2>File and Folder Expectations</h2>
+<p>By default the plugin scans:</p>
+<ul>
+<li><code>Data/Radio/Playlists/&lt;Name&gt;</code></li>
+<li><code>Data/Radio/Stations/&lt;Name&gt;</code></li>
+<li><code>Data/Radio/FX</code></li>
+</ul>
+<p>Station folder naming rules:</p>
+<ul>
+<li>files starting with <code>transition_</code> are treated as transitions</li>
+<li>files starting with <code>ad_</code> are treated as ads</li>
+<li>other audio files are treated as songs</li>
+</ul>
+<p>FX lookup accepts either the stem or the full filename.</p>
+    </article>
+  </main>
+</body>
+</html>
