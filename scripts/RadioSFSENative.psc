@@ -33,5 +33,10 @@ Bool Function playFx(ObjectReference activatorRef, String fxBasename) Global Nat
 Bool Function stopFx(ObjectReference activatorRef) Global Native
 String Function lastError(ObjectReference activatorRef) Global Native
 
+; Register a radio ref as a specific device class for per-tuner persistence.
+; deviceClass: 0 = portable (maps to shared portable device), 1 = fixed/terminal (per-ref device).
+; Call before any other native on a fixed tuner ref. Portable tuners never need this call.
+Function notifyDeviceClass(ObjectReference activatorRef, Int deviceClass) Global Native
+
 ; Activator/player positional data feed for fade calculations.
 Function set_positions(ObjectReference activatorRef, Float activatorX, Float activatorY, Float activatorZ, Float playerX, Float playerY, Float playerZ, Float playerYawDeg) Global Native

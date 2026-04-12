@@ -41,7 +41,8 @@ constexpr auto kCommandWaitTimeout = std::chrono::milliseconds(5000);
 constexpr auto kStreamStartWaitTimeout = std::chrono::milliseconds(10000);
 constexpr auto kStreamStartPoll = std::chrono::milliseconds(50);
 constexpr auto kSessionFlushInterval = std::chrono::seconds(1);
-constexpr std::uint64_t kPortableDeviceId = 0x14;
+constexpr std::uint64_t kPortableDeviceId  = 0x14;             // portable tuner (all portable refs including player ref)
+constexpr std::uint64_t kFixedDeviceIdBase = 0x0001'0000'0000ULL;  // fixed/terminal tuners: kFixedDeviceIdBase | baseFormId (stable, per radio model)
 constexpr std::uint64_t kResumeSeekMinimumMs = 250;
 constexpr char kSessionFileName[] = "RadioSFSE.session.json";
 

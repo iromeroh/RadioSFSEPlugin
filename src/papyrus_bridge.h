@@ -75,6 +75,7 @@ private:
     static bool nativePlayFx(std::monostate, RE::TESObjectREFR* activatorRef, std::string fxBasename);
     static bool nativeStopFx(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::string nativeLastError(std::monostate, RE::TESObjectREFR* activatorRef);
+    static void nativeNotifyDeviceClass(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t deviceClass);
     static void nativeSetPositions(
         std::monostate,
         RE::TESObjectREFR* activatorRef,

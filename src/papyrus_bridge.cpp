@@ -10,11 +10,28 @@
 
 #include <cstdint>
 #include <optional>
+#include <sstream>
 #include <variant>
 
 namespace
 {
-constexpr std::uint64_t kSharedRadioDeviceId = 0x14;
+// Device ID constants.
+// kPortableDeviceId (0x14) covers all portable tuners — player ref (inventory) and any placed
+// portable ref (world) both fall through to this value.
+// Fixed/terminal tuners use kFixedDeviceIdBase | baseFormId, where baseFormId is the ESM form
+// ID of the base object (e.g. the terminal mesh/activator form), not the placed ref's form ID.
+// Base form IDs are stable across sessions regardless of how the ref was created (CK-placed or
+// outpost-built), so different radio models each get a separate persistent slot and there is
+// no accumulation across sessions from volatile placed-ref IDs.
+constexpr std::uint64_t kPortableDeviceId  = 0x14;
+constexpr std::uint64_t kFixedDeviceIdBase = 0x0001'0000'0000ULL;
+
+// Per-session registration: placed ref form ID -> device ID.
+// Fixed terminal refs register via notifyDeviceClass(ref, 1); their placed ref form ID maps to
+// kFixedDeviceIdBase | baseFormId. Portable refs are never registered here; they fall back to
+// kPortableDeviceId.
+std::mutex g_deviceClassMutex;
+std::unordered_map<std::uint32_t, std::uint64_t> g_formIdToDeviceId;
 
 std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
 {
@@ -22,7 +39,16 @@ std::uint64_t deviceKeyFromRef(RE::TESObjectREFR* activatorRef)
         return 0;
     }
 
-    return kSharedRadioDeviceId;
+    const auto formId = activatorRef->GetFormID();
+    {
+        std::lock_guard<std::mutex> lock(g_deviceClassMutex);
+        const auto it = g_formIdToDeviceId.find(formId);
+        if (it != g_formIdToDeviceId.end()) {
+            return it->second;
+        }
+    }
+    // Default: portable device. Also covers the player ref (formId == 0x14 == kPortableDeviceId).
+    return kPortableDeviceId;
 }
 
 std::string buildFailureMessage(
@@ -230,6 +256,7 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "playFx", &PapyrusBridge::nativePlayFx, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "stopFx", &PapyrusBridge::nativeStopFx, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "lastError", &PapyrusBridge::nativeLastError, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "notifyDeviceClass", &PapyrusBridge::nativeNotifyDeviceClass, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "set_positions", &PapyrusBridge::nativeSetPositions, std::nullopt, false);
 
     registered_ = true;
@@ -929,6 +956,38 @@ std::string PapyrusBridge::nativeLastError(std::monostate, RE::TESObjectREFR* ac
     }
 
     return self->getLastError(deviceKeyFromRef(activatorRef));
+}
+
+void PapyrusBridge::nativeNotifyDeviceClass(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t deviceClass)
+{
+    PapyrusBridge* self = g_instance_;
+    if (activatorRef == nullptr) {
+        return;
+    }
+
+    const auto formId = activatorRef->GetFormID();
+    std::uint64_t deviceId = kPortableDeviceId;
+    if (deviceClass == 1) {
+        // Key fixed terminals by their base form ID so that different radio models each get
+        // their own persistent slot. Base form IDs are stable across sessions (defined in the
+        // ESM), so this avoids the accumulation problem from volatile placed-ref IDs.
+        const auto baseObj = activatorRef->GetBaseObject();
+        const auto baseFormId = baseObj ? baseObj->GetFormID() : formId;
+        deviceId = kFixedDeviceIdBase | static_cast<std::uint64_t>(baseFormId);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_deviceClassMutex);
+        g_formIdToDeviceId[formId] = deviceId;
+    }
+
+    if (self != nullptr) {
+        std::ostringstream msg;
+        msg << "[M6] notifyDeviceClass: formId=0x" << std::hex << formId
+            << " class=" << std::dec << deviceClass
+            << " deviceId=0x" << std::hex << deviceId;
+        self->logger_.info(msg.str());
+    }
 }
 
 void PapyrusBridge::nativeSetPositions(

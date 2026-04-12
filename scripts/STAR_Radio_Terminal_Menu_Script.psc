@@ -100,11 +100,19 @@ Function PromoteTerminalAsActiveEmitter(ObjectReference akTerminalRef)
 		return
 	endif
 
+	; Register this ref as a fixed-tuner device before any other native call so that
+	; all subsequent calls on akTerminalRef are routed to the shared fixed device slot.
+	RadioSFSENative.notifyDeviceClass(akTerminalRef, 1)
+
 	ObjectReference previousEmitter = mgr.getEmitter()
 	if previousEmitter == akTerminalRef
 		mgr.UpdateLastRadioLocation(akTerminalRef)
 		return
 	endif
+
+	; Read the fixed slot's current native source now, before saving/stopping the previous
+	; emitter, so we can decide below whether to initialise from defaults or just restore.
+	String fixedNativeSource = mgr.RadioCurrentSourceName(akTerminalRef)
 
 	if previousEmitter != None
 		mgr.CapturePersistentState(previousEmitter)
@@ -115,7 +123,22 @@ Function PromoteTerminalAsActiveEmitter(ObjectReference akTerminalRef)
 
 	mgr.setEmitter(akTerminalRef)
 	mgr.UpdateLastRadioLocation(akTerminalRef)
-	mgr.ApplyPersistentStateToEmitter(akTerminalRef)
+
+	if fixedNativeSource != ""
+		; Fixed slot has its own persisted state — just sync fade params.
+		mgr.ApplyFadeParams(akTerminalRef)
+	else
+		; Fixed slot is fresh (first ever use or JSON was cleared).
+		; Initialise from the startup playlist rather than inheriting the portable's state.
+		Int startMediaType = mgr.getMediaType()
+		mgr.RadioChangeToNextSource(akTerminalRef, startMediaType)
+		String startSource = mgr.RadioCurrentSourceName(akTerminalRef)
+		if startSource == "" && mgr.StartupPlaylist != ""
+			mgr.RadioChangePlaylist(akTerminalRef, mgr.StartupPlaylist)
+		endif
+		mgr.ApplyFadeParams(akTerminalRef)
+	endif
+
 	mgr.CapturePersistentState(akTerminalRef)
 	mgr.SyncCellMusicMute(akTerminalRef)
 EndFunction
