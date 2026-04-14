@@ -116,6 +116,9 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
         if previousEmitter != self
             if previousEmitter != None
                 mgr.CapturePersistentState(previousEmitter)
+                if mgr.RadioIsPlaying(previousEmitter)
+                    mgr.RadioStop(previousEmitter)
+                endif
             endif
             mgr.setEmitter(self)
             mgr.UpdateLastRadioLocation(self)

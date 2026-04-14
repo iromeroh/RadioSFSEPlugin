@@ -1233,6 +1233,266 @@ Function setEmitter(ObjectReference ref)
         
 EndFunction
 
+Function NotifyNoShortcutEmitter()
+	if GetCarriedRadioCount() > 0 || canUseRadioControls()
+		Notify("No active radio device.", True)
+	else
+		Notify("Build or buy a radio first.", True)
+	endif
+EndFunction
+
+Bool Function PlayShortcutFxIfReachable(ObjectReference emitterRef, String fxBasename)
+	if emitterRef == None || fxBasename == ""
+		return false
+	endif
+	if !IsEmitterReachableFromPlayer(emitterRef)
+		return false
+	endif
+	return RadioPlayFx(emitterRef, fxBasename)
+EndFunction
+
+Function StopShortcutFx(ObjectReference emitterRef)
+	if emitterRef == None
+		return
+	endif
+	if IsSFSEAvailable(emitterRef)
+		RadioSFSENative.stopFx(emitterRef)
+	endif
+EndFunction
+
+Bool Function WaitForShortcutPlaybackResult(ObjectReference emitterRef, Float timeoutSeconds = 6.0, Float stepSeconds = 0.25)
+	Float elapsed = 0.0
+	while elapsed < timeoutSeconds
+		if RadioIsPlaying(emitterRef)
+			return true
+		endif
+
+		String errTick = RadioLastError(emitterRef)
+		if errTick != ""
+			return false
+		endif
+
+		Utility.Wait(stepSeconds)
+		elapsed += stepSeconds
+	endwhile
+
+	return RadioIsPlaying(emitterRef)
+EndFunction
+
+ObjectReference Function PrepareEmitterForShortcut()
+	ObjectReference emitterRef = ResolveEmitterForControls()
+	if emitterRef == None
+		return None
+	endif
+
+	Actor player = Game.GetPlayer()
+	ObjectReference previousEmitter = RadioEmitter
+	if previousEmitter != emitterRef
+		if previousEmitter != None
+			CapturePersistentState(previousEmitter)
+		endif
+
+		setEmitter(emitterRef)
+		if emitterRef == player
+			lastRadioWorldspace = None
+			lastRadioCell = None
+		else
+			UpdateLastRadioLocation(emitterRef)
+		endif
+
+		if !RadioIsPlaying(emitterRef)
+			ApplyPersistentStateToEmitter(emitterRef)
+		else
+			ApplyFadeParams(emitterRef)
+		endif
+	endif
+
+	return emitterRef
+EndFunction
+
+String Function ShortcutNowPlayingLabel(ObjectReference emitterRef)
+	String label = RadioCurrentTrackBasename(emitterRef)
+	if label == ""
+		label = RadioCurrentSourceName(emitterRef)
+	endif
+	return label
+EndFunction
+
+Function ShortcutNextSource()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	Int category = RadioGetMediaType(emitterRef)
+	if category == 2 || category == 3
+		Notify("Changing source...", True)
+		PlayShortcutFxIfReachable(emitterRef, "tuning_short.mp3")
+	else
+		Notify("Changing source...", True)
+		PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
+	endif
+
+	Bool selected = RadioSelectNextSource(emitterRef, category)
+	StopShortcutFx(emitterRef)
+	if !selected
+		String errText = RadioLastError(emitterRef)
+		if errText == ""
+			errText = "Could not change playlist/source."
+		endif
+		Notify(errText, True)
+	else
+		String sourceName = RadioCurrentSourceName(emitterRef)
+		Notify("Selected: " + sourceName, True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
+Function ShortcutPlayPause()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	if RadioIsPlaying(emitterRef)
+		RadioPause(emitterRef)
+		StopShortcutFx(emitterRef)
+		String errPause = RadioLastError(emitterRef)
+		if errPause != ""
+			Notify(errPause, True)
+		else
+			Notify("Playback paused.")
+		endif
+		CapturePersistentState(emitterRef)
+		return
+	endif
+
+	Int shortcutMediaType = RadioGetMediaType(emitterRef)
+	if shortcutMediaType == 3
+		Notify("Starting stream...", True)
+		PlayShortcutFxIfReachable(emitterRef, "tuning_long.mp3")
+	else
+		Notify("Starting playback...", True)
+	endif
+
+	RadioPlay(emitterRef)
+	Bool started = WaitForShortcutPlaybackResult(emitterRef)
+	StopShortcutFx(emitterRef)
+	if started
+		Notify("Now playing: " + ShortcutNowPlayingLabel(emitterRef), True)
+	else
+		String errText = RadioLastError(emitterRef)
+		if errText == ""
+			errText = "Could not start playback."
+		endif
+		PlayShortcutFxIfReachable(emitterRef, "no_station.mp3")
+		Notify(errText, True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
+Function ShortcutForward()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	RadioForward(emitterRef)
+	String errText = RadioLastError(emitterRef)
+	if errText != "" && !RadioIsPlaying(emitterRef)
+		Utility.Wait(0.3)
+		RadioForward(emitterRef)
+		errText = RadioLastError(emitterRef)
+	endif
+
+	if errText != ""
+		Notify(errText, True)
+	else
+		Notify("Now playing: " + ShortcutNowPlayingLabel(emitterRef), True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
+Function ShortcutRewind()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	RadioRewind(emitterRef)
+	String errText = RadioLastError(emitterRef)
+	if errText != "" && !RadioIsPlaying(emitterRef)
+		Utility.Wait(0.3)
+		RadioRewind(emitterRef)
+		errText = RadioLastError(emitterRef)
+	endif
+
+	if errText != ""
+		Notify(errText, True)
+	else
+		Notify("Now playing: " + ShortcutNowPlayingLabel(emitterRef), True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
+Function ShortcutVolumeUp()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	Notify("Increasing volume...", True)
+	PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
+	Float volumeStepNow = ResolveVolumeStepPercent(emitterRef, 20.0)
+	Bool volUpOk = RadioVolumeUp(emitterRef, volumeStepNow)
+	StopShortcutFx(emitterRef)
+	if !volUpOk
+		String errText = RadioLastError(emitterRef)
+		if errText == ""
+			errText = "Could not increase volume."
+		endif
+		Notify(errText, True)
+	else
+		Notify("Volume: " + RadioGetVolume(emitterRef), True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
+Function ShortcutVolumeDown()
+	ObjectReference emitterRef = PrepareEmitterForShortcut()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	Notify("Decreasing volume...", True)
+	PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
+	Float volumeStepNow = ResolveVolumeStepPercent(emitterRef, 20.0)
+	Bool volDownOk = RadioVolumeDown(emitterRef, volumeStepNow)
+	StopShortcutFx(emitterRef)
+	if !volDownOk
+		String errText = RadioLastError(emitterRef)
+		if errText == ""
+			errText = "Could not decrease volume."
+		endif
+		Notify(errText, True)
+	else
+		Notify("Volume: " + RadioGetVolume(emitterRef), True)
+	endif
+
+	CapturePersistentState(emitterRef)
+EndFunction
+
 Function ApplyFadeParams(ObjectReference emitterRef)
 	if emitterRef == None
 		return
