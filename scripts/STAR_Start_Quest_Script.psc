@@ -1008,6 +1008,44 @@ Bool Function IsEmitterReachableFromPlayer(ObjectReference emitterRef)
 	return reachable
 EndFunction
 
+Bool Function IsTrackedEmitterStillReachable(ObjectReference emitterRef)
+	Actor player = Game.GetPlayer()
+	if player == None || emitterRef == None
+		return false
+	endif
+
+	if emitterRef == player
+		return IsEmitterReachableFromPlayer(emitterRef)
+	endif
+
+	if emitterRef != RadioEmitter
+		return IsEmitterReachableFromPlayer(emitterRef)
+	endif
+
+	if lastRadioWorldspace != None
+		Bool sameWorldspace = player.GetWorldSpace() == lastRadioWorldspace
+		if !sameWorldspace
+			Trace("IsTrackedEmitterStillReachable: false (stored worldspace mismatch) emitter=" + emitterRef)
+		endif
+		return sameWorldspace
+	endif
+
+	if lastRadioCell != None
+		if player.GetWorldSpace() != None
+			Trace("IsTrackedEmitterStillReachable: false (player moved from interior cell to worldspace) emitter=" + emitterRef)
+			return false
+		endif
+
+		Bool sameCell = player.GetParentCell() == lastRadioCell
+		if !sameCell
+			Trace("IsTrackedEmitterStillReachable: false (stored cell mismatch) emitter=" + emitterRef)
+		endif
+		return sameCell
+	endif
+
+	return IsEmitterReachableFromPlayer(emitterRef)
+EndFunction
+
 Bool Function IsEmitterReferenceInvalid(ObjectReference emitterRef)
 	if emitterRef == None
 		return true
@@ -1778,12 +1816,12 @@ Event OnTimer(int aiTimerID)
 		endif
 		Trace("OnTimer state: controlsRef=" + controlsRef + " emitterRef=" + emitterRef + " carried=" + GetCarriedRadioCount())
 
-		if emitterRef != None && RadioIsPlaying(emitterRef)
-			if !IsEmitterReachableFromPlayer(emitterRef)
-				; World radios pause when player is not in the same worldspace/cell.
-				Trace("OnTimer: pausing unreachable emitter " + emitterRef)
-				RadioPause(emitterRef)
-				ResetTrackChangeNotification(emitterRef)
+			if emitterRef != None && RadioIsPlaying(emitterRef)
+				if !IsTrackedEmitterStillReachable(emitterRef)
+					; World radios pause when player is not in the same worldspace/cell.
+					Trace("OnTimer: pausing unreachable emitter " + emitterRef)
+					RadioPause(emitterRef)
+					ResetTrackChangeNotification(emitterRef)
 			elseif emitterRef != player
 				; Keep fade updates only for in-world radios.
 				Trace("OnTimer: push fade sample for emitter " + emitterRef)
