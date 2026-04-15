@@ -351,6 +351,7 @@ Event OnContainerChanged(ObjectReference akNewContainer, ObjectReference akOldCo
 	if player == None
 		return
 	endif
+	ObjectReference playerRef = player as ObjectReference
 
 	ObjectReference currentEmitter = mgr.getEmitter()
 	int carriedRadiosNow = mgr.GetCarriedRadioCount()
@@ -362,14 +363,10 @@ Event OnContainerChanged(ObjectReference akNewContainer, ObjectReference akOldCo
 		targetEmitter = self
 		Trace("OnContainerChanged branch: dropped to world -> target=self")
 	elseif akNewContainer == player
-		; Picking up the active radio (or with no active radio) shifts control to inventory radio.
-		if currentEmitter == self || currentEmitter == None || currentEmitter == player
-			targetEmitter = player
-			Trace("OnContainerChanged branch: moved to player -> target=player")
-		else
-			Trace("OnContainerChanged: ignored pickup because current emitter is another world radio.")
-			return
-		endif
+		; Picking up any portable radio should stop the current emitter and clear active state.
+		; The next control/play action will resolve the inventory radio via ResolveEmitterForControls().
+		targetEmitter = None
+		Trace("OnContainerChanged branch: moved to player -> clear active emitter for inventory handoff")
 	else
 		; Moving radios to other containers must not hijack an unrelated in-world main radio.
 		if currentEmitter != self
@@ -387,7 +384,25 @@ Event OnContainerChanged(ObjectReference akNewContainer, ObjectReference akOldCo
 	endif
 	Trace("OnContainerChanged targetEmitter=" + targetEmitter)
 
-	if currentEmitter != None && currentEmitter != targetEmitter
+	if akNewContainer == player && targetEmitter == None
+		if currentEmitter != None
+			Trace("OnContainerChanged: pickup stop current emitter " + currentEmitter)
+			mgr.CapturePersistentState(currentEmitter)
+			mgr.RadioStop(currentEmitter)
+		endif
+
+		if self != currentEmitter && mgr.RadioIsPlaying(self)
+			Trace("OnContainerChanged: pickup stop self emitter " + self)
+			mgr.CapturePersistentState(self)
+			mgr.RadioStop(self)
+		endif
+
+		if playerRef != currentEmitter && playerRef != self && mgr.RadioIsPlaying(playerRef)
+			Trace("OnContainerChanged: pickup stop player emitter " + playerRef)
+			mgr.CapturePersistentState(playerRef)
+			mgr.RadioStop(playerRef)
+		endif
+	elseif currentEmitter != None && currentEmitter != targetEmitter
 		Trace("OnContainerChanged: stopping previous emitter " + currentEmitter)
 		mgr.CapturePersistentState(currentEmitter)
 		mgr.RadioStop(currentEmitter)
