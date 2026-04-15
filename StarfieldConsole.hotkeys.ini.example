@@ -1,0 +1,8 @@
+[Hotkeys]
+; Replace ID if your quest Editor ID is different in CK.
+F6=CQF FE01380B ShortcutNextSource
+F7=CQF FE01380B ShortcutPlayPause
+F8=CQF FE01380B ShortcutForward
+F9=CQF FE01380B ShortcutRewind
+F10=CQF FE01380B ShortcutVolumeUp
+F11=CQF FE01380B ShortcutVolumeDown
