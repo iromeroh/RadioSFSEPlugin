@@ -1616,10 +1616,14 @@ Function SyncCellMusicMute(ObjectReference emitterRef = None)
 EndFunction
 
 Function ApplyPersistentStateToEmitter(ObjectReference emitterRef)
+    
+	return  ; does nothing
+
 	if emitterRef == None
 		return
 	endif
 
+	
 	if IsSFSEAvailable(emitterRef)
 		mediaType = RadioGetMediaType(emitterRef)
 		String nativeSource = RadioCurrentSourceName(emitterRef)
@@ -1664,6 +1668,8 @@ Function ApplyPersistentStateToEmitter(ObjectReference emitterRef)
 EndFunction
 
 Function CapturePersistentState(ObjectReference emitterRef = None)
+    return ; does nothing
+	
 	if emitterRef == None
 		emitterRef = ResolveEmitterForState()
 	endif
