@@ -1488,7 +1488,7 @@ Function ShortcutVolumeUp()
 		return
 	endif
 
-	Notify("Increasing volume...", True)
+	; Notify("Increasing volume...", True)
 	PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
 	Float volumeStepNow = ResolveVolumeStepPercent(emitterRef, 20.0)
 	Bool volUpOk = RadioVolumeUp(emitterRef, volumeStepNow)
@@ -1513,7 +1513,7 @@ Function ShortcutVolumeDown()
 		return
 	endif
 
-	Notify("Decreasing volume...", True)
+	; Notify("Decreasing volume...", True)
 	PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
 	Float volumeStepNow = ResolveVolumeStepPercent(emitterRef, 20.0)
 	Bool volDownOk = RadioVolumeDown(emitterRef, volumeStepNow)
