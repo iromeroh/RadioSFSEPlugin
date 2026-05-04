@@ -249,6 +249,8 @@ bool PapyrusBridge::tryRegisterNatives(const char* reason)
     vm->BindNativeMethod(kScriptName, "getPlayMode", &PapyrusBridge::nativeGetPlayMode, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getVolumeStepPercent", &PapyrusBridge::nativeGetVolumeStepPercent, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getDebugVerbosity", &PapyrusBridge::nativeGetDebugVerbosity, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getDialogDuckEnabled", &PapyrusBridge::nativeGetDialogDuckEnabled, std::nullopt, false);
+    vm->BindNativeMethod(kScriptName, "getDialogDuckVolume", &PapyrusBridge::nativeGetDialogDuckVolume, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setVolume", &PapyrusBridge::nativeSetVolume, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "setPlayMode", &PapyrusBridge::nativeSetPlayMode, std::nullopt, false);
     vm->BindNativeMethod(kScriptName, "getTrack", &PapyrusBridge::nativeGetTrack, std::nullopt, false);
@@ -789,6 +791,26 @@ std::int32_t PapyrusBridge::nativeGetDebugVerbosity(std::monostate, RE::TESObjec
     }
 
     return self->engine_.configuredDebugVerbosity();
+}
+
+bool PapyrusBridge::nativeGetDialogDuckEnabled(std::monostate, RE::TESObjectREFR*)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return false;
+    }
+
+    return self->engine_.configuredDialogDuckEnabled();
+}
+
+float PapyrusBridge::nativeGetDialogDuckVolume(std::monostate, RE::TESObjectREFR*)
+{
+    PapyrusBridge* self = g_instance_;
+    if (self == nullptr) {
+        return 20.0F;
+    }
+
+    return self->engine_.configuredDialogDuckVolume();
 }
 
 bool PapyrusBridge::nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume)

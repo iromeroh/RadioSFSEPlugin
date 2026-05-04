@@ -68,6 +68,8 @@ public:
     std::int32_t getPlayMode(std::uint64_t deviceId = 0) const;
     float configuredVolumeStepPercent() const;
     std::int32_t configuredDebugVerbosity() const;
+    bool configuredDialogDuckEnabled() const;
+    float configuredDialogDuckVolume() const;
     bool setVolume(float volume, std::uint64_t deviceId = 0);
     bool setPlayMode(std::int32_t playMode, std::uint64_t deviceId = 0);
     std::string getTrack(std::uint64_t deviceId = 0) const;
@@ -171,6 +173,8 @@ private:
         bool verboseStreamDiagnostics{ false };
         float volumeStepPercent{ 20.0F };
         std::int32_t debugVerbosity{ 0 };
+        bool dialogDuckEnabled{ false };
+        float dialogDuckVolume{ 20.0F };
         std::vector<std::pair<std::string, std::string>> streamStations;
     };
 

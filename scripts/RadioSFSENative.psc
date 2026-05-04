@@ -25,6 +25,8 @@ Int Function getMediaType(ObjectReference activatorRef) Global Native
 Int Function getPlayMode(ObjectReference activatorRef) Global Native
 Float Function getVolumeStepPercent(ObjectReference activatorRef) Global Native
 Int Function getDebugVerbosity(ObjectReference activatorRef) Global Native
+Bool Function getDialogDuckEnabled(ObjectReference activatorRef) Global Native
+Float Function getDialogDuckVolume(ObjectReference activatorRef) Global Native
 Bool Function setVolume(ObjectReference activatorRef, Float vol) Global Native
 Bool Function setPlayMode(ObjectReference activatorRef, Int playMode) Global Native
 String Function getTrack(ObjectReference activatorRef) Global Native

@@ -53,6 +53,8 @@ Bool Property AutoDisableLegacyFadeOverride = True Auto
 Bool Property MuteCellMusicWhileRadioPlaying = True Auto
 MusicType Property MusicSilenceOverride Auto
 Bool Property MusicSilenceActive = False Auto Hidden
+Bool Property InDialogDuck = False Auto Hidden
+Float Property PreDialogDuckVolume = -1.0 Auto Hidden
 
 ; Distribution fallback mode (no SFSE plugin):
 ; - mediaType 2 (stations) can play CK-declared Wwise events.
@@ -1365,10 +1367,10 @@ Function ShortcutNextSource()
 
 	Int category = RadioGetMediaType(emitterRef)
 	if category == 2 || category == 3
-		Notify("Changing source...", True)
+		; Notify("Changing source...", True)
 		PlayShortcutFxIfReachable(emitterRef, "tuning_short.mp3")
 	else
-		Notify("Changing source...", True)
+		; Notify("Changing source...", True)
 		PlayShortcutFxIfReachable(emitterRef, "notification.mp3")
 	endif
 
@@ -1828,6 +1830,7 @@ Event OnTimer(int aiTimerID)
 					Trace("OnTimer: pausing unreachable emitter " + emitterRef)
 					RadioPause(emitterRef)
 					ResetTrackChangeNotification(emitterRef)
+					; emitterRef = None
 			elseif emitterRef != player
 				; Keep fade updates only for in-world radios.
 				Trace("OnTimer: push fade sample for emitter " + emitterRef)
@@ -1840,6 +1843,7 @@ Event OnTimer(int aiTimerID)
 			ResetTrackChangeNotification(emitterRef)
 		endif
 
+	UpdateDialogDuck(emitterRef)
 	SyncCellMusicMute()
 
 	if UpdateFade
@@ -1847,6 +1851,47 @@ Event OnTimer(int aiTimerID)
                 StartTimer(FadeUpdateSeconds, MyTimer)
 	endif
 EndEvent
+
+Function UpdateDialogDuck(ObjectReference emitterRef)
+	if emitterRef == None || !IsSFSEAvailable(emitterRef)
+		return
+	endif
+
+	if !RadioIsPlaying(emitterRef)
+		if InDialogDuck
+			InDialogDuck = False
+			PreDialogDuckVolume = -1.0
+		endif
+		return
+	endif
+
+	if !RadioSFSENative.getDialogDuckEnabled(emitterRef)
+		if InDialogDuck
+			if PreDialogDuckVolume >= 0.0
+				RadioSetVolume(emitterRef, PreDialogDuckVolume)
+			endif
+			InDialogDuck = False
+			PreDialogDuckVolume = -1.0
+		endif
+		return
+	endif
+
+	Bool inDialog = Game.IsPlayerInDialogue()
+	if inDialog && !InDialogDuck
+		Float duckVol = RadioSFSENative.getDialogDuckVolume(emitterRef)
+		PreDialogDuckVolume = RadioGetVolume(emitterRef)
+		RadioSetVolume(emitterRef, duckVol)
+		InDialogDuck = True
+		Trace("Dialog duck: " + PreDialogDuckVolume + " -> " + duckVol)
+	elseif !inDialog && InDialogDuck
+		if PreDialogDuckVolume >= 0.0
+			RadioSetVolume(emitterRef, PreDialogDuckVolume)
+			Trace("Dialog duck restored: " + PreDialogDuckVolume)
+		endif
+		InDialogDuck = False
+		PreDialogDuckVolume = -1.0
+	endif
+EndFunction
 
 Event OnQuestShutdown()
 	SetMusicSilenceActive(False)

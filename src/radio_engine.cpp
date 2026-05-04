@@ -2021,6 +2021,18 @@ std::int32_t RadioEngine::configuredDebugVerbosity() const
     return std::clamp<std::int32_t>(config_.debugVerbosity, 0, 2);
 }
 
+bool RadioEngine::configuredDialogDuckEnabled() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return config_.dialogDuckEnabled;
+}
+
+float RadioEngine::configuredDialogDuckVolume() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::clamp(config_.dialogDuckVolume, 0.0F, 200.0F);
+}
+
 bool RadioEngine::setVolume(float volume, std::uint64_t deviceId)
 {
     return runBoolCommandForDevice(deviceId, [this, volume]() {
@@ -2424,6 +2436,8 @@ bool RadioEngine::loadConfig()
     config_.streamStations.clear();
     config_.volumeStepPercent = 20.0F;
     config_.debugVerbosity = 0;
+    config_.dialogDuckEnabled = false;
+    config_.dialogDuckVolume = 20.0F;
     bool debugVerbosityProvided = false;
 
     const auto path = configPath();
@@ -2491,6 +2505,10 @@ bool RadioEngine::loadConfig()
                 config_.verboseStreamDiagnostics = value == "1" || toLower(value) == "true";
             } else if (key == "volume_step_percent") {
                 config_.volumeStepPercent = std::stof(value);
+            } else if (key == "dialog_duck_enabled") {
+                config_.dialogDuckEnabled = value == "1" || toLower(value) == "true";
+            } else if (key == "dialog_duck_volume") {
+                config_.dialogDuckVolume = std::stof(value);
             } else if (key == "debug_verbosity") {
                 config_.debugVerbosity = std::stoi(value);
                 debugVerbosityProvided = true;
@@ -2550,11 +2568,19 @@ bool RadioEngine::loadConfig()
         }
     }
 
+    if (config_.dialogDuckVolume < 0.0F) {
+        config_.dialogDuckVolume = 0.0F;
+    } else if (config_.dialogDuckVolume > 200.0F) {
+        config_.dialogDuckVolume = 200.0F;
+    }
+
     logger_.info("Config loaded. root_path=" + pathToUtf8(config_.radioRootPath) +
                  ", spatial_pan=" + std::string(config_.enableSpatialPan ? "true" : "false") +
                  ", pan_distance=" + std::to_string(config_.panDistance) +
                  ", volume_step_percent=" + std::to_string(config_.volumeStepPercent) +
-                 ", debug_verbosity=" + std::to_string(config_.debugVerbosity));
+                 ", debug_verbosity=" + std::to_string(config_.debugVerbosity) +
+                 ", dialog_duck_enabled=" + std::string(config_.dialogDuckEnabled ? "true" : "false") +
+                 ", dialog_duck_volume=" + std::to_string(config_.dialogDuckVolume));
     return true;
 }
 

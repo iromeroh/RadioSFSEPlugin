@@ -68,6 +68,8 @@ private:
     static std::int32_t nativeGetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef);
     static float nativeGetVolumeStepPercent(std::monostate, RE::TESObjectREFR* activatorRef);
     static std::int32_t nativeGetDebugVerbosity(std::monostate, RE::TESObjectREFR* activatorRef);
+    static bool nativeGetDialogDuckEnabled(std::monostate, RE::TESObjectREFR* activatorRef);
+    static float nativeGetDialogDuckVolume(std::monostate, RE::TESObjectREFR* activatorRef);
     static bool nativeSetVolume(std::monostate, RE::TESObjectREFR* activatorRef, float volume);
     static bool nativeSetPlayMode(std::monostate, RE::TESObjectREFR* activatorRef, std::int32_t playMode);
     static std::string nativeGetTrack(std::monostate, RE::TESObjectREFR* activatorRef);
