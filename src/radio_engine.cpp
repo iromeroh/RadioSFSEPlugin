@@ -4230,9 +4230,12 @@ void RadioEngine::updateFadeVolumeLocked()
             logger_.warn("Media Foundation SetVolume failed: " + formatHresult(hr));
             return;
         }
-
-        leftVolume = volume;
-        rightVolume = volume;
+        const float streamBalance = static_cast<float>(std::clamp(pan, -1.0, 1.0));
+        const HRESULT balanceHr = mfState_->player->SetBalance(streamBalance);
+        if (FAILED(balanceHr)) {
+            logger_.warn("Media Foundation SetBalance failed: " + formatHresult(balanceHr));
+            return;
+        }
     } else if (backend_ == PlaybackBackend::DirectShowStream) {
         if (!dsState_ || !dsState_->audio) {
             leftVolume = volume;
@@ -4250,8 +4253,14 @@ void RadioEngine::updateFadeVolumeLocked()
                 logger_.warn("DirectShow put_Volume failed: " + formatHresult(hr));
                 return;
             }
-            leftVolume = volume;
-            rightVolume = volume;
+
+            const long dsBalance =
+                static_cast<long>(std::lround(std::clamp(pan, -1.0, 1.0) * 10000.0));
+            const HRESULT balanceHr = dsState_->audio->put_Balance(dsBalance);
+            if (FAILED(balanceHr)) {
+                logger_.warn("DirectShow put_Balance failed: " + formatHresult(balanceHr));
+                return;
+            }
         }
     } else if (config_.enableSpatialPan && panControlsAvailable_) {
         const bool leftOk =
