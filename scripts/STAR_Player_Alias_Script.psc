@@ -14,3 +14,14 @@ Event OnPlayerLoadGame()
                 mgr.SyncCellMusicMute()
         endif
 EndEvent
+
+Event OnItemEquipped(Form akBaseObject, ObjectReference akReference)
+        STAR_Start_Quest_Script mgr = GetMgr()
+        if mgr == None
+                return
+        endif
+
+        if mgr.RadioShortcutWeapon != None && akBaseObject == mgr.RadioShortcutWeapon
+                mgr.RequestOpenControlTerminal()
+        endif
+EndEvent

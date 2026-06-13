@@ -9,6 +9,9 @@ Book Property playStopSlate Auto  ; Drag your slate form here in CK
 ;Book Property forwardSlate Auto  ; Drag your slate form here in CK
 ;Book Property mediaTypeSlate Auto  ; Drag your slate form here in CK
 ;Book Property playlistSlate Auto  ; Drag your slate form here in CK
+ObjectReference Property RadioControlTerminalRef Auto
+Form Property RadioShortcutWeapon Auto
+Int Property RadioShortcutWeaponFavoriteSlot = -1 Auto
 
 ; Vendor merchant containers (references) to seed with radios on first quest init.
 ; New Atlantis
@@ -55,6 +58,8 @@ MusicType Property MusicSilenceOverride Auto
 Bool Property MusicSilenceActive = False Auto Hidden
 Bool Property InDialogDuck = False Auto Hidden
 Float Property PreDialogDuckVolume = -1.0 Auto Hidden
+Bool Property PendingControlTerminalOpen = False Auto Hidden
+Float Property ControlTerminalOpenDelay = 0.25 Auto
 
 ; Distribution fallback mode (no SFSE plugin):
 ; - mediaType 2 (stations) can play CK-declared Wwise events.
@@ -103,6 +108,7 @@ Form Property CachedRadioBaseForm = None Auto Hidden
 Bool Property TriedLegacyPermanentBaseResolve = False Auto Hidden
 
 int MyTimer = 528
+int ControlTerminalTimer = 529
 int mediaType = 1
 
 Function SetCompatError(String errorText)
@@ -1143,6 +1149,12 @@ Function EnsureControlSlateInventory(Bool shouldHave)
 		if playStopSlate != None && player.GetItemCount(playStopSlate) == 0
 			player.AddItem(playStopSlate, 1, true)
 		endif
+		if RadioShortcutWeapon != None && player.GetItemCount(RadioShortcutWeapon) == 0
+			player.AddItem(RadioShortcutWeapon, 1, true)
+			if RadioShortcutWeaponFavoriteSlot >= 0
+				player.MarkItemAsFavorite(RadioShortcutWeapon, RadioShortcutWeaponFavoriteSlot)
+			endif
+		endif
 		return
 	endif
 
@@ -1150,6 +1162,12 @@ Function EnsureControlSlateInventory(Bool shouldHave)
 		int c0 = player.GetItemCount(playStopSlate)
 		if c0 > 0
 			player.RemoveItem(playStopSlate, c0, true)
+		endif
+	endif
+	if RadioShortcutWeapon != None
+		int c1 = player.GetItemCount(RadioShortcutWeapon)
+		if c1 > 0
+			player.RemoveItem(RadioShortcutWeapon, c1, true)
 		endif
 	endif
 EndFunction
@@ -1279,6 +1297,55 @@ Function NotifyNoShortcutEmitter()
 	else
 		Notify("Build or buy a radio first.", True)
 	endif
+EndFunction
+
+Function RequestOpenControlTerminal(Float delaySeconds = -1.0)
+	if PendingControlTerminalOpen
+		return
+	endif
+
+	if RadioControlTerminalRef == None
+		Notify("Radio terminal menu not configured.", True)
+		return
+	endif
+
+	if !canUseRadioControls()
+		Notify("Build or buy a radio first.", True)
+		return
+	endif
+
+	ObjectReference emitterRef = ResolveEmitterForControls()
+	if emitterRef == None
+		NotifyNoShortcutEmitter()
+		return
+	endif
+
+	if !IsEmitterReachableFromPlayer(emitterRef)
+		Notify("Radio is not here.", True)
+		return
+	endif
+
+	if delaySeconds < 0.0
+		delaySeconds = ControlTerminalOpenDelay
+	endif
+	if delaySeconds < 0.01
+		delaySeconds = 0.01
+	endif
+
+	PendingControlTerminalOpen = True
+	StartTimer(delaySeconds, ControlTerminalTimer)
+EndFunction
+
+Function OpenControlTerminalNow()
+	PendingControlTerminalOpen = False
+
+	Actor player = Game.GetPlayer()
+	if player == None || RadioControlTerminalRef == None
+		return
+	endif
+
+	RadioControlTerminalRef.MoveTo(player)
+	RadioControlTerminalRef.Activate(player)
 EndFunction
 
 Bool Function PlayShortcutFxIfReachable(ObjectReference emitterRef, String fxBasename)
@@ -1804,6 +1871,11 @@ EndFunction
 Event OnTimer(int aiTimerID)
         ; Debug.Notification("OnTimer().")
         Trace("OnTimer().")
+
+        if aiTimerID == ControlTerminalTimer
+            OpenControlTerminalNow()
+            return
+        endif
 
         if aiTimerID != MyTimer
             return  ; Ignore if wrong ID or stopped

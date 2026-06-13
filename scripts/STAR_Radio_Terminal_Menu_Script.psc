@@ -22,6 +22,7 @@ TerminalMenu Property RadioTerminalMenu_Submenu Auto Const
 Float Property VolumeStep = 20.0 Auto
 Bool Property BypassOwnedRadioRequirement = True Auto
 Bool Property StopPreviousEmitterOnActivate = True Auto
+Bool Property UseControlsEmitter = False Auto
 
 Int Property MenuItem_MediaType = 0 Auto Const
 Int Property MenuItem_Source = 1 Auto Const
@@ -95,6 +96,14 @@ Bool Function PlayFxIfReachable(ObjectReference emitterRef, String fxBasename)
 	return mgr.RadioPlayFx(emitterRef, fxBasename)
 EndFunction
 
+ObjectReference Function ResolveMenuEmitter(ObjectReference akTerminalRef)
+	if !UseControlsEmitter
+		return akTerminalRef
+	endif
+
+	return mgr.ResolveEmitterForControls()
+EndFunction
+
 Function PromoteTerminalAsActiveEmitter(ObjectReference akTerminalRef)
 	if !EnsureManager() || akTerminalRef == None
 		return
@@ -157,7 +166,9 @@ Event OnTerminalMenuEnter(TerminalMenu akTerminalBase, ObjectReference akTermina
 		return
 	endif
 
-	PromoteTerminalAsActiveEmitter(akTerminalRef)
+	if !UseControlsEmitter
+		PromoteTerminalAsActiveEmitter(akTerminalRef)
+	endif
 EndEvent
 
 Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, ObjectReference akTerminalRef)
@@ -184,12 +195,26 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		return
 	endif
 
-	PromoteTerminalAsActiveEmitter(akTerminalRef)
-	if !mgr.IsEmitterReachableFromPlayer(akTerminalRef)
-		if mgr.RadioIsPlaying(akTerminalRef)
-			mgr.RadioPause(akTerminalRef)
+	ObjectReference emitterRef = ResolveMenuEmitter(akTerminalRef)
+	if emitterRef == None
+		Notify("No radio device.", true)
+		return
+	endif
+
+	if !UseControlsEmitter
+		PromoteTerminalAsActiveEmitter(akTerminalRef)
+		emitterRef = akTerminalRef
+	endif
+
+	if !mgr.IsEmitterReachableFromPlayer(emitterRef)
+		if mgr.RadioIsPlaying(emitterRef)
+			mgr.RadioPause(emitterRef)
 		endif
-		Notify("Terminal radio is not reachable.", true)
+		if UseControlsEmitter
+			Notify("Radio is not here.", true)
+		else
+			Notify("Terminal radio is not reachable.", true)
+		endif
 		return
 	endif
 
@@ -201,20 +226,20 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 			mediaType = mediaType + 1
 		endif
 
-		mgr.setMediaType(mediaType, akTerminalRef)
+		mgr.setMediaType(mediaType, emitterRef)
 
 		if mediaType == 2 || mediaType == 3
-			PlayFxIfReachable(akTerminalRef, "tuning_short.mp3")
+			PlayFxIfReachable(emitterRef, "tuning_short.mp3")
 		else
-			PlayFxIfReachable(akTerminalRef, "notification.mp3")
+			PlayFxIfReachable(emitterRef, "notification.mp3")
 		endif
 
-		String sourceName = mgr.RadioCurrentSourceName(akTerminalRef)
+		String sourceName = mgr.RadioCurrentSourceName(emitterRef)
 		if sourceName == ""
-			if mgr.RadioGetMediaType(akTerminalRef) == mediaType
+			if mgr.RadioGetMediaType(emitterRef) == mediaType
 				Notify("Media type " + mediaType + " selected. No sources found.", true)
 			else
-				String err0 = mgr.RadioLastError(akTerminalRef)
+				String err0 = mgr.RadioLastError(emitterRef)
 				if err0 == ""
 					err0 = "Could not change media type."
 				endif
@@ -223,33 +248,33 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		else
 			Notify("Media type " + mediaType + ": " + sourceName, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_Source
 		Int mediaType2 = mgr.getMediaType()
 		if mediaType2 == 2 || mediaType2 == 3
-			PlayFxIfReachable(akTerminalRef, "tuning_short.mp3")
+			PlayFxIfReachable(emitterRef, "tuning_short.mp3")
 		else
-			PlayFxIfReachable(akTerminalRef, "notification.mp3")
+			PlayFxIfReachable(emitterRef, "notification.mp3")
 		endif
 
-		Bool selected = mgr.RadioSelectNextSource(akTerminalRef, mediaType2)
+		Bool selected = mgr.RadioSelectNextSource(emitterRef, mediaType2)
 		if !selected
-			String err1 = mgr.RadioLastError(akTerminalRef)
+			String err1 = mgr.RadioLastError(emitterRef)
 			if err1 == ""
 				err1 = "Could not change playlist/source."
 			endif
 			Notify(err1, true)
 		else
-			String sourceName2 = mgr.RadioCurrentSourceName(akTerminalRef)
+			String sourceName2 = mgr.RadioCurrentSourceName(emitterRef)
 			Notify("Selected: " + sourceName2, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_PlayPause
-		if mgr.RadioIsPlaying(akTerminalRef)
-			mgr.RadioPause(akTerminalRef)
-			String err2p = mgr.RadioLastError(akTerminalRef)
+		if mgr.RadioIsPlaying(emitterRef)
+			mgr.RadioPause(emitterRef)
+			String err2p = mgr.RadioLastError(emitterRef)
 			if err2p != ""
 				Notify(err2p, true)
 			else
@@ -257,107 +282,107 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 			endif
 		else
 			if mgr.getMediaType() == 3
-				PlayFxIfReachable(akTerminalRef, "tuning_long.mp3")
+				PlayFxIfReachable(emitterRef, "tuning_long.mp3")
 			endif
-			mgr.RadioPlay(akTerminalRef)
-			if WaitForPlaybackResult(akTerminalRef)
-				String nowName = mgr.RadioCurrentTrackBasename(akTerminalRef)
+			mgr.RadioPlay(emitterRef)
+			if WaitForPlaybackResult(emitterRef)
+				String nowName = mgr.RadioCurrentTrackBasename(emitterRef)
 				if nowName == ""
-					nowName = mgr.RadioCurrentSourceName(akTerminalRef)
+					nowName = mgr.RadioCurrentSourceName(emitterRef)
 				endif
 				Notify("Now playing: " + nowName, true)
 			else
-				String err2 = mgr.RadioLastError(akTerminalRef)
+				String err2 = mgr.RadioLastError(emitterRef)
 				if err2 == ""
 					err2 = "Could not start playback."
 				endif
-				PlayFxIfReachable(akTerminalRef, "no_station.mp3")
+				PlayFxIfReachable(emitterRef, "no_station.mp3")
 				Notify(err2, true)
 			endif
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_Forward
-		mgr.RadioForward(akTerminalRef)
-		String err3 = mgr.RadioLastError(akTerminalRef)
-		if err3 != "" && !mgr.RadioIsPlaying(akTerminalRef)
+		mgr.RadioForward(emitterRef)
+		String err3 = mgr.RadioLastError(emitterRef)
+		if err3 != "" && !mgr.RadioIsPlaying(emitterRef)
 			Utility.Wait(0.3)
-			mgr.RadioForward(akTerminalRef)
-			err3 = mgr.RadioLastError(akTerminalRef)
+			mgr.RadioForward(emitterRef)
+			err3 = mgr.RadioLastError(emitterRef)
 		endif
 
 		if err3 != ""
 			Notify(err3, true)
 		else
-			String nextName = mgr.RadioCurrentTrackBasename(akTerminalRef)
+			String nextName = mgr.RadioCurrentTrackBasename(emitterRef)
 			if nextName == ""
-				nextName = mgr.RadioCurrentSourceName(akTerminalRef)
+				nextName = mgr.RadioCurrentSourceName(emitterRef)
 			endif
 			Notify("Now playing: " + nextName, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_Rewind
-		mgr.RadioRewind(akTerminalRef)
-		String errRewind = mgr.RadioLastError(akTerminalRef)
-		if errRewind != "" && !mgr.RadioIsPlaying(akTerminalRef)
+		mgr.RadioRewind(emitterRef)
+		String errRewind = mgr.RadioLastError(emitterRef)
+		if errRewind != "" && !mgr.RadioIsPlaying(emitterRef)
 			Utility.Wait(0.3)
-			mgr.RadioRewind(akTerminalRef)
-			errRewind = mgr.RadioLastError(akTerminalRef)
+			mgr.RadioRewind(emitterRef)
+			errRewind = mgr.RadioLastError(emitterRef)
 		endif
 
 		if errRewind != ""
 			Notify(errRewind, true)
 		else
-			String rewindName = mgr.RadioCurrentTrackBasename(akTerminalRef)
+			String rewindName = mgr.RadioCurrentTrackBasename(emitterRef)
 			if rewindName == ""
-				rewindName = mgr.RadioCurrentSourceName(akTerminalRef)
+				rewindName = mgr.RadioCurrentSourceName(emitterRef)
 			endif
 			Notify("Now playing: " + rewindName, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_VolumeUp
-		Float volumeStepNow = mgr.ResolveVolumeStepPercent(akTerminalRef, VolumeStep)
-		Bool volUpOk = mgr.RadioVolumeUp(akTerminalRef, volumeStepNow)
+		Float volumeStepNow = mgr.ResolveVolumeStepPercent(emitterRef, VolumeStep)
+		Bool volUpOk = mgr.RadioVolumeUp(emitterRef, volumeStepNow)
 		if !volUpOk
-			String err4 = mgr.RadioLastError(akTerminalRef)
+			String err4 = mgr.RadioLastError(emitterRef)
 			if err4 == ""
 				err4 = "Could not increase volume."
 			endif
 			Notify(err4, true)
 		else
-			Float volUp = mgr.RadioGetVolume(akTerminalRef)
+			Float volUp = mgr.RadioGetVolume(emitterRef)
 			Notify("Volume: " + volUp, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_VolumeDown
-		Float volumeStepNowDown = mgr.ResolveVolumeStepPercent(akTerminalRef, VolumeStep)
-		Bool volDownOk = mgr.RadioVolumeDown(akTerminalRef, volumeStepNowDown)
+		Float volumeStepNowDown = mgr.ResolveVolumeStepPercent(emitterRef, VolumeStep)
+		Bool volDownOk = mgr.RadioVolumeDown(emitterRef, volumeStepNowDown)
 		if !volDownOk
-			String err5 = mgr.RadioLastError(akTerminalRef)
+			String err5 = mgr.RadioLastError(emitterRef)
 			if err5 == ""
 				err5 = "Could not decrease volume."
 			endif
 			Notify(err5, true)
 		else
-			Float volDown = mgr.RadioGetVolume(akTerminalRef)
+			Float volDown = mgr.RadioGetVolume(emitterRef)
 			Notify("Volume: " + volDown, true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 
 	elseif auiMenuItemID == MenuItem_PlayMode
-		Int playMode = mgr.RadioGetPlayMode(akTerminalRef)
+		Int playMode = mgr.RadioGetPlayMode(emitterRef)
 		if playMode == 2
 			playMode = 1
 		else
 			playMode = 2
 		endif
 
-		Bool playModeOk = mgr.RadioSetPlayMode(akTerminalRef, playMode)
+		Bool playModeOk = mgr.RadioSetPlayMode(emitterRef, playMode)
 		if !playModeOk
-			String errPlayMode = mgr.RadioLastError(akTerminalRef)
+			String errPlayMode = mgr.RadioLastError(emitterRef)
 			if errPlayMode == ""
 				errPlayMode = "Could not change play mode."
 			endif
@@ -365,10 +390,10 @@ Event OnTerminalMenuItemRun(int auiMenuItemID, TerminalMenu akTerminalBase, Obje
 		else
 			Notify("Play mode: " + mgr.PlayModeName(playMode), true)
 		endif
-		mgr.CapturePersistentState(akTerminalRef)
+		mgr.CapturePersistentState(emitterRef)
 	else
 		Trace("Unhandled menu item id: " + auiMenuItemID + " base=" + akTerminalBase)
 	endif
 
-	mgr.SyncCellMusicMute(akTerminalRef)
+	mgr.SyncCellMusicMute(emitterRef)
 EndEvent
