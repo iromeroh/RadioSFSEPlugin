@@ -119,6 +119,8 @@ Function PromoteTerminalAsActiveEmitter(ObjectReference akTerminalRef)
 		return
 	endif
 
+	mgr.DeactivateHeadsetForExternalRadio()
+
 	; Read the fixed slot's current native source now, before saving/stopping the previous
 	; emitter, so we can decide below whether to initialise from defaults or just restore.
 	String fixedNativeSource = mgr.RadioCurrentSourceName(akTerminalRef)

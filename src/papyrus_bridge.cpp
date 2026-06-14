@@ -18,18 +18,21 @@ namespace
 // Device ID constants.
 // kPortableDeviceId (0x14) covers all portable tuners — player ref (inventory) and any placed
 // portable ref (world) both fall through to this value.
+// kHeadsetDeviceId covers the equipped headset player-radio slot. Papyrus switches the player
+// ref between portable and headset classes as the headset is equipped/unequipped.
 // Fixed/terminal tuners use kFixedDeviceIdBase | baseFormId, where baseFormId is the ESM form
 // ID of the base object (e.g. the terminal mesh/activator form), not the placed ref's form ID.
 // Base form IDs are stable across sessions regardless of how the ref was created (CK-placed or
 // outpost-built), so different radio models each get a separate persistent slot and there is
 // no accumulation across sessions from volatile placed-ref IDs.
 constexpr std::uint64_t kPortableDeviceId  = 0x14;
+constexpr std::uint64_t kHeadsetDeviceId   = 0x0000'0000'0015ULL;
 constexpr std::uint64_t kFixedDeviceIdBase = 0x0001'0000'0000ULL;
 
 // Per-session registration: placed ref form ID -> device ID.
 // Fixed terminal refs register via notifyDeviceClass(ref, 1); their placed ref form ID maps to
 // kFixedDeviceIdBase | baseFormId. Portable refs are never registered here; they fall back to
-// kPortableDeviceId.
+// kPortableDeviceId unless Papyrus explicitly registers the player ref as headset class.
 std::mutex g_deviceClassMutex;
 std::unordered_map<std::uint32_t, std::uint64_t> g_formIdToDeviceId;
 
@@ -996,6 +999,8 @@ void PapyrusBridge::nativeNotifyDeviceClass(std::monostate, RE::TESObjectREFR* a
         const auto baseObj = activatorRef->GetBaseObject();
         const auto baseFormId = baseObj ? baseObj->GetFormID() : formId;
         deviceId = kFixedDeviceIdBase | static_cast<std::uint64_t>(baseFormId);
+    } else if (deviceClass == 2) {
+        deviceId = kHeadsetDeviceId;
     }
 
     {

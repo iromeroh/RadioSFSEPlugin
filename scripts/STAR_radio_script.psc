@@ -112,6 +112,7 @@ Bool Function ShowMenuAndExecute(ObjectReference akActionRef = None, Bool fromWo
 
     ObjectReference emitterRef = None
     if fromWorldActivate
+        mgr.DeactivateHeadsetForExternalRadio()
         ObjectReference previousEmitter = mgr.getEmitter()
         if previousEmitter != self
             if previousEmitter != None

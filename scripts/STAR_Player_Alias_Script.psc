@@ -23,5 +23,18 @@ Event OnItemEquipped(Form akBaseObject, ObjectReference akReference)
 
         if mgr.RadioShortcutWeapon != None && akBaseObject == mgr.RadioShortcutWeapon
                 mgr.RequestOpenControlTerminal()
+        elseif mgr.IsRadioHeadsetForm(akBaseObject)
+                mgr.OnRadioHeadsetEquipped()
+        endif
+EndEvent
+
+Event OnItemUnequipped(Form akBaseObject, ObjectReference akReference)
+        STAR_Start_Quest_Script mgr = GetMgr()
+        if mgr == None
+                return
+        endif
+
+        if mgr.IsRadioHeadsetForm(akBaseObject)
+                mgr.OnRadioHeadsetUnequipped()
         endif
 EndEvent

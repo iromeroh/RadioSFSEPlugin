@@ -36,8 +36,9 @@ Bool Function stopFx(ObjectReference activatorRef) Global Native
 String Function lastError(ObjectReference activatorRef) Global Native
 
 ; Register a radio ref as a specific device class for per-tuner persistence.
-; deviceClass: 0 = portable (maps to shared portable device), 1 = fixed/terminal (per-ref device).
-; Call before any other native on a fixed tuner ref. Portable tuners never need this call.
+; deviceClass: 0 = portable (shared portable device), 1 = fixed/terminal (per-ref device), 2 = headset.
+; Call before native commands when a ref can change class, such as the player ref switching
+; between portable inventory radio and equipped headset.
 Function notifyDeviceClass(ObjectReference activatorRef, Int deviceClass) Global Native
 
 ; Activator/player positional data feed for fade calculations.

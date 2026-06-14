@@ -1,10 +1,26 @@
 Scriptname STAR_Start_Quest_Script extends Quest
 
+; =================================================================================================
+; CK setup: core radio forms and active emitter references
+; =================================================================================================
+; permanentRadioEmitter is the legacy placed/inventory radio reference used by older setup.
+; RadioItemBaseForm is the preferred stable base form for ownership checks.
+; PortableRadioForms can include additional portable radio item/base forms that share persistence.
+; RadioEmitter tracks the currently active world/fixed/player emitter at runtime.
 ObjectReference Property permanentRadioEmitter Auto Mandatory
 Form Property RadioItemBaseForm Auto
+FormList Property PortableRadioForms Auto
 ObjectReference Property RadioEmitter Auto
 String Property StartupPlaylist = "Default" Auto
 
+; =================================================================================================
+; CK setup: player control surfaces
+; =================================================================================================
+; playStopSlate is optional. If None, only weapon/keyboard/terminal controls are distributed.
+; RadioControlTerminalRef is the persistent invisible terminal used by slate/weapon shortcuts.
+; RadioShortcutWeapon is a favoriteable weapon used as a one-key menu opener.
+; RadioHeadset is an equipped-only player radio source; carrying it alone does not play audio.
+; RadioHeadsetForms can include additional headset armor forms that share persistence.
 Book Property playStopSlate Auto  ; Drag your slate form here in CK
 ;Book Property forwardSlate Auto  ; Drag your slate form here in CK
 ;Book Property mediaTypeSlate Auto  ; Drag your slate form here in CK
@@ -12,42 +28,26 @@ Book Property playStopSlate Auto  ; Drag your slate form here in CK
 ObjectReference Property RadioControlTerminalRef Auto
 Form Property RadioShortcutWeapon Auto
 Int Property RadioShortcutWeaponFavoriteSlot = -1 Auto
+Armor Property RadioHeadset Auto
+FormList Property RadioHeadsetForms Auto
+Bool Property HeadsetRadioEnabled = True Auto
 
-; Vendor merchant containers (references) to seed with radios on first quest init.
-; New Atlantis
-ObjectReference Property VendorChest_JemisonMercantile Auto
-ObjectReference Property VendorChest_UCDistribution Auto
-; Cydonia
-ObjectReference Property VendorChest_CydoniaTradeAuthority Auto
-ObjectReference Property VendorChest_CydoniaElectronics Auto
-; Akila
-ObjectReference Property VendorChest_AkilaGeneralStore Auto
-ObjectReference Property VendorChest_AkilaTradeAuthority Auto
-; Neon
-ObjectReference Property VendorChest_NeonSiegharts Auto
-ObjectReference Property VendorChest_NeonTradeAuthority Auto
-
+; =================================================================================================
+; CK setup: startup, access, and diagnostics
+; =================================================================================================
 Bool Property AutoStartPlayback = False Auto
 Bool Property UseStationStart = False Auto
 Bool Property UpdateFade = True Auto
 Float Property FadeUpdateSeconds = 0.25 Auto
-WorldSpace Property lastRadioWorldspace = None Auto
-Cell Property lastRadioCell = None Auto Hidden
 Bool Property RequireOwnedRadioForControls = True Auto
 Bool Property GiveStarterRadioOnInit = False Auto
-Bool Property RadioControlsUnlocked = False Auto Hidden
 Bool Property VerboseNotifications = False Auto
 Bool Property VerboseTraceLogs = False Auto
-Int Property VendorStockMin = 2 Auto
-Int Property VendorStockMax = 3 Auto
-Bool Property VendorStockSeeded = False Auto Hidden
-Bool Property HasPersistentState = False Auto Hidden
-String Property PersistentSourceName = "" Auto Hidden
-String Property PersistentTrackName = "" Auto Hidden
-Float Property PersistentVolume = 60.0 Auto Hidden
 Bool Property NotifyTrackChangesOnTimer = True Auto
-ObjectReference Property LastTrackNotifyEmitter = None Auto Hidden
-String Property LastTrackNotifiedName = "" Auto Hidden
+
+; =================================================================================================
+; CK setup: fade, pan, and music/dialogue integration
+; =================================================================================================
 Bool Property UseCustomFadeParams = False Auto
 Float Property FadeMinDistance = 0.1 Auto
 Float Property FadeMaxDistance = 35.0 Auto
@@ -55,12 +55,28 @@ Float Property FadePanDistance = 5.0 Auto
 Bool Property AutoDisableLegacyFadeOverride = True Auto
 Bool Property MuteCellMusicWhileRadioPlaying = True Auto
 MusicType Property MusicSilenceOverride Auto
+
+; =================================================================================================
+; Runtime state: access, active emitter location, persistence, notifications, and timers
+; =================================================================================================
+Bool Property RadioControlsUnlocked = False Auto Hidden
+WorldSpace Property lastRadioWorldspace = None Auto
+Cell Property lastRadioCell = None Auto Hidden
+Bool Property HasPersistentState = False Auto Hidden
+String Property PersistentSourceName = "" Auto Hidden
+String Property PersistentTrackName = "" Auto Hidden
+Float Property PersistentVolume = 60.0 Auto Hidden
+ObjectReference Property LastTrackNotifyEmitter = None Auto Hidden
+String Property LastTrackNotifiedName = "" Auto Hidden
 Bool Property MusicSilenceActive = False Auto Hidden
 Bool Property InDialogDuck = False Auto Hidden
 Float Property PreDialogDuckVolume = -1.0 Auto Hidden
 Bool Property PendingControlTerminalOpen = False Auto Hidden
 Float Property ControlTerminalOpenDelay = 0.25 Auto
 
+; =================================================================================================
+; CK setup: distribution fallback mode (no SFSE plugin)
+; =================================================================================================
 ; Distribution fallback mode (no SFSE plugin):
 ; - mediaType 2 (stations) can play CK-declared Wwise events.
 ; - mediaType 1/3 (local/stream) are SFSE-only and fall back to static.
@@ -72,6 +88,9 @@ WwiseEvent Property FallbackTuningLongEvent Auto
 WwiseEvent Property FallbackNotificationEvent Auto
 WwiseEvent Property FallbackNoStationEvent Auto
 
+; =================================================================================================
+; CK setup: fallback station form lists
+; =================================================================================================
 FormList Property StationAkilaSongs Auto
 FormList Property StationAkilaJingles Auto
 FormList Property StationAkilaAds Auto
@@ -88,6 +107,9 @@ FormList Property StationParadisoSongs Auto
 FormList Property StationParadisoJingles Auto
 FormList Property StationParadisoAds Auto
 
+; =================================================================================================
+; Runtime state: SFSE compatibility, fallback sequencing, and cached setup lookups
+; =================================================================================================
 Bool Property SFSEProbeDone = False Auto Hidden
 Bool Property SFSEAvailable = False Auto Hidden
 Bool Property SFSEMissingNoticeShown = False Auto Hidden
@@ -107,6 +129,9 @@ Float Property FallbackVolume = 60.0 Auto Hidden
 Form Property CachedRadioBaseForm = None Auto Hidden
 Bool Property TriedLegacyPermanentBaseResolve = False Auto Hidden
 
+; =================================================================================================
+; Runtime constants and simple internal state
+; =================================================================================================
 int MyTimer = 528
 int ControlTerminalTimer = 529
 int mediaType = 1
@@ -883,7 +908,6 @@ EndFunction
 Event OnInit()
 	ResetSFSEProbeState()
 	RefreshControlSlateAccess()
-	SeedVendorStock()
 
 	InitializeRadio()
 EndEvent
@@ -927,11 +951,140 @@ EndFunction
 
 int Function GetCarriedRadioCount()
 	Actor player = Game.GetPlayer()
-	Form radioBase = RadioBaseForm()
-	if player == None || radioBase == None
+	if player == None
 		return 0
 	endif
-	return player.GetItemCount(radioBase)
+
+	int count = 0
+	Form radioBase = RadioBaseForm()
+	if radioBase != None
+		count += player.GetItemCount(radioBase)
+	endif
+
+	if PortableRadioForms != None
+		int i = 0
+		int listCount = PortableRadioForms.GetSize()
+		while i < listCount
+			Form portableForm = PortableRadioForms.GetAt(i)
+			if portableForm != None && portableForm != radioBase
+				count += player.GetItemCount(portableForm)
+			endif
+			i += 1
+		endwhile
+	endif
+
+	return count
+EndFunction
+
+int Function GetCarriedHeadsetCount()
+	Actor player = Game.GetPlayer()
+	if player == None
+		return 0
+	endif
+
+	int count = 0
+	if RadioHeadset != None
+		count += player.GetItemCount(RadioHeadset)
+	endif
+
+	if RadioHeadsetForms != None
+		int i = 0
+		int listCount = RadioHeadsetForms.GetSize()
+		while i < listCount
+			Form headsetForm = RadioHeadsetForms.GetAt(i)
+			if headsetForm != None && headsetForm != RadioHeadset
+				count += player.GetItemCount(headsetForm)
+			endif
+			i += 1
+		endwhile
+	endif
+
+	return count
+EndFunction
+
+Bool Function IsRadioHeadsetEquipped()
+	Actor player = Game.GetPlayer()
+	if !HeadsetRadioEnabled || player == None
+		return false
+	endif
+
+	if RadioHeadset != None && player.IsEquipped(RadioHeadset)
+		return true
+	endif
+
+	if RadioHeadsetForms != None
+		int i = 0
+		int listCount = RadioHeadsetForms.GetSize()
+		while i < listCount
+			Form headsetForm = RadioHeadsetForms.GetAt(i)
+			if headsetForm != None && headsetForm != RadioHeadset && player.IsEquipped(headsetForm)
+				return true
+			endif
+			i += 1
+		endwhile
+	endif
+
+	return false
+EndFunction
+
+Bool Function IsPortableRadioForm(Form itemForm)
+	if itemForm == None
+		return false
+	endif
+
+	Form radioBase = RadioBaseForm()
+	if radioBase != None && itemForm == radioBase
+		return true
+	endif
+
+	return PortableRadioForms != None && PortableRadioForms.HasForm(itemForm)
+EndFunction
+
+Bool Function IsRadioHeadsetForm(Form itemForm)
+	if itemForm == None
+		return false
+	endif
+
+	if RadioHeadset != None && itemForm == RadioHeadset
+		return true
+	endif
+
+	return RadioHeadsetForms != None && RadioHeadsetForms.HasForm(itemForm)
+EndFunction
+
+Bool Function HasPlayerRadioEmitter()
+	return GetCarriedRadioCount() > 0 || IsRadioHeadsetEquipped()
+EndFunction
+
+Function SyncPlayerDeviceClass()
+	Actor player = Game.GetPlayer()
+	if player == None
+		return
+	endif
+
+	if IsRadioHeadsetEquipped()
+		RadioSFSENative.notifyDeviceClass(player, 2)
+	else
+		RadioSFSENative.notifyDeviceClass(player, 0)
+	endif
+EndFunction
+
+Function ForceStopPlayerRadioSlots()
+	Actor player = Game.GetPlayer()
+	if player == None
+		return
+	endif
+
+	ObjectReference playerRef = player as ObjectReference
+	RadioSFSENative.notifyDeviceClass(playerRef, 0)
+	CapturePersistentState(playerRef)
+	RadioStop(playerRef)
+
+	RadioSFSENative.notifyDeviceClass(playerRef, 2)
+	CapturePersistentState(playerRef)
+	RadioStop(playerRef)
+
+	StopFallbackPlayback()
 EndFunction
 
 Bool Function canUseRadioControls()
@@ -965,7 +1118,7 @@ Bool Function IsReferenceReachableFromPlayer(ObjectReference ref)
 	endif
 
 	if ref == player
-		return GetCarriedRadioCount() > 0
+		return HasPlayerRadioEmitter()
 	endif
 
 	WorldSpace playerWS = player.GetWorldSpace()
@@ -1001,10 +1154,9 @@ Bool Function IsEmitterReachableFromPlayer(ObjectReference emitterRef)
 	endif
 
 	if emitterRef == player
-		int carried = GetCarriedRadioCount()
-		Bool reachableOnPlayer = carried > 0
+		Bool reachableOnPlayer = HasPlayerRadioEmitter()
 		if !reachableOnPlayer
-			Trace("IsEmitterReachableFromPlayer: false (emitter=player, carried=0).")
+			Trace("IsEmitterReachableFromPlayer: false (emitter=player, no portable radio or equipped headset).")
 		endif
 		return reachableOnPlayer
 	endif
@@ -1172,56 +1324,6 @@ Function EnsureControlSlateInventory(Bool shouldHave)
 	endif
 EndFunction
 
-Function SeedVendorStock()
-	if VendorStockSeeded
-		return
-	endif
-
-	Form radioBase = RadioBaseForm()
-	if radioBase == None
-		Trace("SeedVendorStock skipped: radio base form is missing.")
-		return
-	endif
-
-	AddRadioStockToChest(VendorChest_JemisonMercantile, radioBase, "Jemison Mercantile")
-	AddRadioStockToChest(VendorChest_UCDistribution, radioBase, "UC Distribution")
-	AddRadioStockToChest(VendorChest_CydoniaTradeAuthority, radioBase, "Cydonia Trade Authority")
-	AddRadioStockToChest(VendorChest_CydoniaElectronics, radioBase, "Cydonia Electronics")
-	AddRadioStockToChest(VendorChest_AkilaGeneralStore, radioBase, "Akila General Store")
-	AddRadioStockToChest(VendorChest_AkilaTradeAuthority, radioBase, "Akila Trade Authority")
-	AddRadioStockToChest(VendorChest_NeonSiegharts, radioBase, "Neon Sieghart's")
-	AddRadioStockToChest(VendorChest_NeonTradeAuthority, radioBase, "Neon Trade Authority")
-
-	VendorStockSeeded = True
-EndFunction
-
-Function AddRadioStockToChest(ObjectReference chestRef, Form radioBase, String label)
-	if chestRef == None || radioBase == None
-		return
-	endif
-
-	int minCount = VendorStockMin
-	if minCount < 1
-		minCount = 1
-	endif
-
-	int maxCount = VendorStockMax
-	if maxCount < minCount
-		maxCount = minCount
-	endif
-
-	int targetCount = Utility.RandomInt(minCount, maxCount)
-	int currentCount = chestRef.GetItemCount(radioBase)
-	int addCount = targetCount - currentCount
-
-	if addCount > 0
-		chestRef.AddItem(radioBase, addCount, true)
-		Trace("Seeded " + label + " with +" + addCount + " radios.")
-	else
-		Trace("Seed skipped for " + label + ". Existing radios: " + currentCount)
-	endif
-EndFunction
-
 Function RefreshControlSlateAccess()
 	Actor player = Game.GetPlayer()
 	if player == None
@@ -1233,7 +1335,7 @@ Function RefreshControlSlateAccess()
 		player.AddItem(radioBase, 1, true)
 	endif
 
-	if GetCarriedRadioCount() > 0
+	if HasPlayerRadioEmitter() || GetCarriedHeadsetCount() > 0
 		RadioControlsUnlocked = True
 	endif
 
@@ -1253,7 +1355,7 @@ ObjectReference Function ResolveEmitterForControls()
 		return None
 	endif
 
-	int carriedRadios = GetCarriedRadioCount()
+	Bool hasPlayerEmitter = HasPlayerRadioEmitter()
 	ObjectReference mainEmitter = RadioEmitter
 
 	if mainEmitter != None && mainEmitter != player
@@ -1261,14 +1363,16 @@ ObjectReference Function ResolveEmitterForControls()
 			return mainEmitter
 		endif
 
-		if carriedRadios > 0
+		if hasPlayerEmitter
+			SyncPlayerDeviceClass()
 			return player
 		endif
 
 		return None
 	endif
 
-	if carriedRadios > 0
+	if hasPlayerEmitter
+		SyncPlayerDeviceClass()
 		return player
 	endif
 
@@ -1292,10 +1396,99 @@ Function setEmitter(ObjectReference ref)
 EndFunction
 
 Function NotifyNoShortcutEmitter()
-	if GetCarriedRadioCount() > 0 || canUseRadioControls()
+	if GetCarriedRadioCount() <= 0 && GetCarriedHeadsetCount() > 0 && !IsRadioHeadsetEquipped()
+		Notify("Equip the radio headset to use it.", True)
+	elseif GetCarriedRadioCount() > 0 || canUseRadioControls()
 		Notify("No active radio device.", True)
 	else
 		Notify("Build or buy a radio first.", True)
+	endif
+EndFunction
+
+Function OnRadioHeadsetEquipped()
+	if !HeadsetRadioEnabled
+		return
+	endif
+
+	Actor player = Game.GetPlayer()
+	if player == None
+		return
+	endif
+
+	ObjectReference playerRef = player as ObjectReference
+	ObjectReference previousEmitter = getEmitter()
+
+	if previousEmitter != None && previousEmitter != playerRef
+		CapturePersistentState(previousEmitter)
+		RadioStop(previousEmitter)
+	endif
+
+	; Stop any player-radio slot before switching the same player ref to headset.
+	ForceStopPlayerRadioSlots()
+	RadioSFSENative.notifyDeviceClass(playerRef, 2)
+
+	RadioControlsUnlocked = True
+	setEmitter(playerRef)
+	lastRadioWorldspace = None
+	lastRadioCell = None
+	ApplyFadeParams(playerRef)
+	CapturePersistentState(playerRef)
+	SyncCellMusicMute(playerRef)
+EndFunction
+
+Function OnRadioHeadsetUnequipped()
+	if !HeadsetRadioEnabled
+		return
+	endif
+
+	Actor player = Game.GetPlayer()
+	if player == None
+		return
+	endif
+
+	ObjectReference playerRef = player as ObjectReference
+	ForceStopPlayerRadioSlots()
+
+	; After the headset is off, player-ref controls should address the portable radio slot.
+	RadioSFSENative.notifyDeviceClass(playerRef, 0)
+
+	if RadioEmitter == playerRef
+		RadioEmitter = None
+		lastRadioWorldspace = None
+		lastRadioCell = None
+	endif
+
+	ResetTrackChangeNotification(playerRef)
+	SyncCellMusicMute(playerRef)
+EndFunction
+
+Function DeactivateHeadsetForExternalRadio()
+	if !HeadsetRadioEnabled
+		return
+	endif
+
+	Actor player = Game.GetPlayer()
+	if player == None
+		return
+	endif
+
+	if IsRadioHeadsetEquipped()
+		ForceStopPlayerRadioSlots()
+		if RadioHeadset != None && player.IsEquipped(RadioHeadset)
+			player.UnequipItem(RadioHeadset, false, true)
+		endif
+		if RadioHeadsetForms != None
+			int i = 0
+			int listCount = RadioHeadsetForms.GetSize()
+			while i < listCount
+				Form headsetForm = RadioHeadsetForms.GetAt(i)
+				if headsetForm != None && headsetForm != RadioHeadset && player.IsEquipped(headsetForm)
+					player.UnequipItem(headsetForm, false, true)
+				endif
+				i += 1
+			endwhile
+		endif
+		RadioSFSENative.notifyDeviceClass(player, 0)
 	endif
 EndFunction
 
